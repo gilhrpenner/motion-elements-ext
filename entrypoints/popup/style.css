@@ -521,6 +521,33 @@ kbd {
   font-family: 'JetBrains Mono', monospace;
 }
 
+.captures-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.captures-link {
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.captures-link:not(:disabled):hover {
+  background: var(--bg-hover);
+  border-color: var(--border-emphasis);
+  color: var(--text-primary);
+}
+
+.captures-link:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .capture-list {
   display: flex;
   flex-direction: column;

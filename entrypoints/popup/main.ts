@@ -102,7 +102,10 @@ app.innerHTML = `
     <section class="captures-section">
       <div class="captures-header">
         <h2>Session Items</h2>
-        <span class="hint" id="captures-hint">local storage</span>
+        <div class="captures-actions">
+          <span class="hint" id="captures-hint">local storage</span>
+          <button class="captures-link" id="open-reorder" type="button">Reorder</button>
+        </div>
       </div>
       <ul class="capture-list" id="capture-list"></ul>
       <p class="empty-state" id="empty-state">No items yet — select a mode above to start.</p>
@@ -123,6 +126,7 @@ const sessionStatus = requiredElement<HTMLParagraphElement>('session-status');
 const statusMessage = requiredElement<HTMLParagraphElement>('status-message');
 const captureList = requiredElement<HTMLUListElement>('capture-list');
 const emptyState = requiredElement<HTMLParagraphElement>('empty-state');
+const openReorderButton = requiredElement<HTMLButtonElement>('open-reorder');
 const startButton = requiredElement<HTMLButtonElement>('start-selection');
 const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
 const blurButton = requiredElement<HTMLButtonElement>('blur-selection');
@@ -330,6 +334,17 @@ clearButton.addEventListener('click', async () => {
   });
 });
 
+openReorderButton.addEventListener('click', async () => {
+  try {
+    await browser.tabs.create({
+      url: new URL('/reorder.html', location.origin).toString(),
+    });
+    window.close();
+  } catch (error) {
+    setStatus(normalizeError(error), true);
+  }
+});
+
 hideAfterCaptureToggle.addEventListener('change', async () => {
   try {
     await setHideAfterCaptureSetting(hideAfterCaptureToggle.checked);
@@ -510,6 +525,7 @@ function syncActionAvailability(busy = false) {
   viewportButton.disabled = busy || !tabIsScriptable;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;
+  openReorderButton.disabled = busy || currentSessionCount < 2;
 }
 
 function setStatus(message: string, isError = false) {

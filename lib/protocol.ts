@@ -51,6 +51,7 @@ export interface BaseSessionRecord {
   id: string;
   capturedAt: string;
   kind: 'capture' | 'text-fragment';
+  sortOrder?: number;
   pageUrl: string;
   pageTitle: string;
   tagName: string;

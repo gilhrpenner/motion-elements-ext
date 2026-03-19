@@ -26,9 +26,19 @@ export async function saveTextFragment(fragment: TextFragmentRecord): Promise<vo
 }
 
 async function saveSessionRecord(record: SessionRecord): Promise<void> {
+  const records = await getSessionRecords();
+  const nextSortOrder =
+    records.reduce(
+      (max, sessionRecord) =>
+        Math.max(max, typeof sessionRecord.sortOrder === 'number' ? sessionRecord.sortOrder : -1),
+      -1,
+    ) + 1;
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, 'readwrite');
-  transaction.objectStore(STORE_NAME).put(record);
+  transaction.objectStore(STORE_NAME).put({
+    ...record,
+    sortOrder: typeof record.sortOrder === 'number' ? record.sortOrder : nextSortOrder,
+  });
   await waitForTransaction(transaction);
 }
 
@@ -39,9 +49,23 @@ export async function getSessionRecords(): Promise<SessionRecord[]> {
   const records = await waitForRequest(request);
   await waitForTransaction(transaction);
 
-  return records
-    .map(normalizeSessionRecord)
-    .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt));
+  const normalizedRecords = records.map(normalizeSessionRecord);
+  const needsSortOrderBackfill = normalizedRecords.some(
+    (record) => typeof record.sortOrder !== 'number',
+  );
+
+  if (needsSortOrderBackfill) {
+    return normalizedRecords
+      .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt))
+      .map((record, index) => ({
+        ...record,
+        sortOrder: index,
+      }));
+  }
+
+  return normalizedRecords.sort(
+    (left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0),
+  );
 }
 
 export async function getCaptureRecords(): Promise<CaptureRecord[]> {
@@ -70,7 +94,9 @@ export async function clearCaptures(): Promise<void> {
 
 export async function deleteLatestSessionRecord(): Promise<SessionRecord | null> {
   const records = await getSessionRecords();
-  const latestRecord = records[0];
+  const latestRecord = records
+    .slice()
+    .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt))[0];
   if (!latestRecord) {
     return null;
   }
@@ -81,6 +107,35 @@ export async function deleteLatestSessionRecord(): Promise<SessionRecord | null>
   await waitForTransaction(transaction);
 
   return latestRecord;
+}
+
+export async function updateSessionRecordOrder(orderedIds: string[]): Promise<void> {
+  const records = await getSessionRecords();
+  const recordMap = new Map(records.map((record) => [record.id, record]));
+  const reorderedRecords: SessionRecord[] = [];
+
+  for (const id of orderedIds) {
+    const record = recordMap.get(id);
+    if (record) {
+      reorderedRecords.push(record);
+      recordMap.delete(id);
+    }
+  }
+
+  reorderedRecords.push(...recordMap.values());
+
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, 'readwrite');
+  const store = transaction.objectStore(STORE_NAME);
+
+  reorderedRecords.forEach((record, index) => {
+    store.put({
+      ...record,
+      sortOrder: index,
+    });
+  });
+
+  await waitForTransaction(transaction);
 }
 
 function normalizeSessionRecord(

@@ -360,23 +360,28 @@ async function exportSession(): Promise<
 
   try {
     const zip = new JSZip();
-    const captures = records.filter(isCaptureRecord);
     const exportFiles = await Promise.all(
-      captures.map(async (capture, index) => {
+      records.map(async (record, index) => {
+        if (!isCaptureRecord(record)) {
+          return null;
+        }
+
         const imageFile = `${EXPORT_FOLDER_NAME}/${buildExportImageFilename(
-          capture,
+          record,
           index,
         )}`;
 
         return {
-          capture,
+          capture: record,
           imageFile,
-          imageBytes: await convertBlobToJpegBytes(capture.imageBlob),
+          imageBytes: await convertBlobToJpegBytes(record.imageBlob),
         };
       }),
     );
     const imageFileMap = new Map(
-      exportFiles.map(({ capture, imageFile }) => [capture.id, imageFile]),
+      exportFiles
+        .filter((file): file is NonNullable<typeof file> => file !== null)
+        .map(({ capture, imageFile }) => [capture.id, imageFile]),
     );
     const items = records.map((record) => {
       if (record.kind === 'capture') {
@@ -401,6 +406,9 @@ async function exportSession(): Promise<
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
     zip.file('LLM_GUIDE.md', buildLlmGuideMarkdown());
     for (const file of exportFiles) {
+      if (!file) {
+        continue;
+      }
       zip.file(file.imageFile, file.imageBytes);
     }
 
