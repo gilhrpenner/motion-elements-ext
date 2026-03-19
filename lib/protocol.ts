@@ -1,5 +1,6 @@
 export const SELECTOR_SCRIPT_PATH = '/content-scripts/content.js';
 export const EXPORT_FOLDER_NAME = 'images';
+export type SelectionMode = 'capture' | 'hide';
 
 export interface SelectionRect {
   tagName: string;
@@ -56,7 +57,7 @@ export interface SessionSummary {
 }
 
 export type ExtensionMessage =
-  | { type: 'START_SELECTION'; tabId: number }
+  | { type: 'START_SELECTION'; tabId: number; mode: SelectionMode }
   | { type: 'STOP_SELECTION'; tabId: number }
   | { type: 'CAPTURE_ELEMENT'; selection: SelectionRect }
   | { type: 'GET_SESSION' }

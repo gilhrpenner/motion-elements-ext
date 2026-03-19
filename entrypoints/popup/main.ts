@@ -21,7 +21,7 @@ app.innerHTML = `
       <p class="eyebrow">Motion Element Capture</p>
       <h1>Capture the exact UI fragments you want to animate.</h1>
       <p class="subhead">
-        Start selection mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to save the PNG and coordinates, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last capture.
+        Start capture mode or hide mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to act, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last hide or capture.
       </p>
       <div class="hero-row">
         <div>
@@ -34,11 +34,14 @@ app.innerHTML = `
 
     <section class="panel">
       <div class="actions">
-        <button class="primary" id="start-selection" type="button">Start Selection</button>
-        <button class="secondary" id="stop-selection" type="button">Stop</button>
+        <button class="primary" id="start-selection" type="button">Start Capture</button>
+        <button class="secondary" id="hide-selection" type="button">Hide Element</button>
       </div>
       <div class="actions">
+        <button class="secondary" id="stop-selection" type="button">Stop</button>
         <button class="secondary" id="export-session" type="button">Export ZIP</button>
+      </div>
+      <div class="actions">
         <button class="ghost" id="clear-session" type="button">Clear Session</button>
       </div>
       <label class="toggle-row" for="hide-after-capture">
@@ -75,6 +78,7 @@ const statusMessage = requiredElement<HTMLParagraphElement>('status-message');
 const captureList = requiredElement<HTMLUListElement>('capture-list');
 const emptyState = requiredElement<HTMLParagraphElement>('empty-state');
 const startButton = requiredElement<HTMLButtonElement>('start-selection');
+const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
 const clearButton = requiredElement<HTMLButtonElement>('clear-session');
@@ -97,6 +101,7 @@ startButton.addEventListener('click', async () => {
     const response = await sendMessage<{ tabId: number }>({
       type: 'START_SELECTION',
       tabId,
+      mode: 'capture',
     });
 
     if (!response.ok) {
@@ -105,6 +110,29 @@ startButton.addEventListener('click', async () => {
     }
 
     setStatus('Selection mode started on the current page.');
+  });
+});
+
+hideButton.addEventListener('click', async () => {
+  const tabId = currentTabId;
+  if (tabId == null) {
+    setStatus('No active browser tab is available.', true);
+    return;
+  }
+
+  await withBusy(async () => {
+    const response = await sendMessage<{ tabId: number }>({
+      type: 'START_SELECTION',
+      tabId,
+      mode: 'hide',
+    });
+
+    if (!response.ok) {
+      setStatus(response.error, true);
+      return;
+    }
+
+    setStatus('Hide mode started on the current page.');
   });
 });
 
@@ -289,6 +317,7 @@ function setBusy(busy: boolean) {
 
 function syncActionAvailability(busy = false) {
   startButton.disabled = busy || !tabIsScriptable;
+  hideButton.disabled = busy || !tabIsScriptable;
   stopButton.disabled = busy || !tabIsScriptable;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;

@@ -6,6 +6,7 @@ import {
   type CaptureRecord,
   type ExtensionMessage,
   type ExtensionResponse,
+  type SelectionMode,
   SELECTOR_SCRIPT_PATH,
   type SelectionRect,
   fail,
@@ -23,7 +24,9 @@ import {
 import { getUnsupportedTabMessage, isScriptableUrl } from '@/lib/tab';
 
 type MessageSender = Browser.runtime.MessageSender;
-type SelectorControlMessage = { type: 'START_SELECTION' | 'STOP_SELECTION' };
+type SelectorControlMessage =
+  | { type: 'START_SELECTION'; mode: SelectionMode }
+  | { type: 'STOP_SELECTION' };
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -51,7 +54,7 @@ async function handleMessage(
 ): Promise<ExtensionResponse<unknown>> {
   switch (message.type) {
     case 'START_SELECTION':
-      return startSelection(message.tabId);
+      return startSelection(message.tabId, message.mode);
     case 'STOP_SELECTION':
       return stopSelection(message.tabId);
     case 'CAPTURE_ELEMENT':
@@ -86,14 +89,17 @@ async function undoLastCapture(): Promise<
   });
 }
 
-async function startSelection(tabId: number): Promise<ExtensionResponse<{ tabId: number }>> {
+async function startSelection(
+  tabId: number,
+  mode: SelectionMode,
+): Promise<ExtensionResponse<{ tabId: number }>> {
   const tab = await browser.tabs.get(tabId);
   if (!isScriptableUrl(tab.url)) {
     return fail(getUnsupportedTabMessage(tab.url));
   }
 
   try {
-    await sendToSelector(tabId, { type: 'START_SELECTION' });
+    await sendToSelector(tabId, { type: 'START_SELECTION', mode });
   } catch (error) {
     if (!isMissingReceiverError(error)) {
       return fail(normalizeError(error));
@@ -104,7 +110,7 @@ async function startSelection(tabId: number): Promise<ExtensionResponse<{ tabId:
         target: { tabId },
         files: [SELECTOR_SCRIPT_PATH],
       });
-      await sendToSelector(tabId, { type: 'START_SELECTION' });
+      await sendToSelector(tabId, { type: 'START_SELECTION', mode });
     } catch (injectionError) {
       return fail(normalizeInjectionError(injectionError, tab.url));
     }

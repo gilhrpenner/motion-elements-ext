@@ -1,4 +1,9 @@
-import type { ExtensionMessage, ExtensionResponse, SelectionRect } from '@/lib/protocol';
+import type {
+  ExtensionMessage,
+  ExtensionResponse,
+  SelectionMode,
+  SelectionRect,
+} from '@/lib/protocol';
 import {
   getHideAfterCaptureSetting,
   getSuppressHoverStateSetting,
@@ -27,6 +32,7 @@ export default defineContentScript({
 
 function createSelectorController() {
   let active = false;
+  let selectionMode: SelectionMode = 'capture';
   let mounted = false;
   let capturing = false;
   let hoveredChain: Element[] = [];
@@ -36,8 +42,10 @@ function createSelectorController() {
   let toast: HTMLDivElement | null = null;
   let captureStyle: HTMLStyleElement | null = null;
   let lastPointer: { x: number; y: number } | null = null;
-  const hiddenCaptureHistory: Array<{
-    captureId: string;
+  const hiddenActionHistory: Array<{
+    actionId: string;
+    source: 'capture' | 'hide';
+    label: string;
     element: HideableElement;
     previousVisibility: string;
     previousPriority: string;
@@ -50,7 +58,7 @@ function createSelectorController() {
 
     switch (message.type) {
       case 'START_SELECTION':
-        activate();
+        activate(message.mode);
         return { ok: true, data: { active: true } };
       case 'STOP_SELECTION':
         deactivate();
@@ -75,11 +83,12 @@ function createSelectorController() {
     mounted = true;
   }
 
-  function activate() {
+  function activate(mode: SelectionMode) {
     active = true;
+    selectionMode = mode;
     capturing = false;
     ensureUi();
-    showToast('Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.');
+    showToast(getSelectionModeMessage(mode));
     if (lastPointer) {
       updateSelectionFromPoint(lastPointer.x, lastPointer.y);
       refreshOverlay();
@@ -133,41 +142,63 @@ function createSelectorController() {
     event.stopImmediatePropagation();
 
     const selection = createSelectionRect(element);
-    const validationError = validateSelection(selection);
-    if (validationError) {
-      showToast(validationError, 'error');
-      return;
-    }
-
-    const suppressHoverState = await getSuppressHoverStateSetting();
     capturing = true;
     hideOverlay();
     hideToast();
-    if (suppressHoverState) {
-      setCaptureFreeze(true);
-    }
     let shouldRecomputeSelection = false;
 
     try {
-      await waitForPaint();
-      const response = (await browser.runtime.sendMessage({
-        type: 'CAPTURE_ELEMENT',
-        selection,
-      } satisfies ExtensionMessage)) as ExtensionResponse<{
-        capture: { id: string; elementLabel: string };
-      }>;
+      if (selectionMode === 'hide') {
+        const hidden = hideElementPreservingSpace(
+          element,
+          crypto.randomUUID(),
+          'hide',
+          getElementLabel(element),
+        );
+        if (!hidden) {
+          showToast('This element cannot be hidden safely.', 'error');
+          return;
+        }
 
-      if (!response?.ok) {
-        showToast(response?.error ?? 'Capture failed.', 'error');
-        return;
-      }
-
-      if (await getHideAfterCaptureSetting()) {
-        hideCapturedElement(element, response.data.capture.id);
         shouldRecomputeSelection = true;
-      }
+        showToast(`Hidden ${getElementLabel(element)}.`, 'success');
+      } else {
+        const validationError = validateSelection(selection);
+        if (validationError) {
+          showToast(validationError, 'error');
+          return;
+        }
 
-      showToast(`Captured ${response.data.capture.elementLabel}.`, 'success');
+        const suppressHoverState = await getSuppressHoverStateSetting();
+        if (suppressHoverState) {
+          setCaptureFreeze(true);
+        }
+
+        await waitForPaint();
+        const response = (await browser.runtime.sendMessage({
+          type: 'CAPTURE_ELEMENT',
+          selection,
+        } satisfies ExtensionMessage)) as ExtensionResponse<{
+          capture: { id: string; elementLabel: string };
+        }>;
+
+        if (!response?.ok) {
+          showToast(response?.error ?? 'Capture failed.', 'error');
+          return;
+        }
+
+        if (await getHideAfterCaptureSetting()) {
+          hideElementPreservingSpace(
+            element,
+            response.data.capture.id,
+            'capture',
+            response.data.capture.elementLabel,
+          );
+          shouldRecomputeSelection = true;
+        }
+
+        showToast(`Captured ${response.data.capture.elementLabel}.`, 'success');
+      }
     } catch (error) {
       showToast(normalizeError(error), 'error');
     } finally {
@@ -319,6 +350,20 @@ function createSelectorController() {
   }
 
   async function undoLastCapture() {
+    const latestHiddenAction = hiddenActionHistory[hiddenActionHistory.length - 1];
+    if (latestHiddenAction?.source === 'hide') {
+      restoreHiddenAction(latestHiddenAction.actionId);
+
+      if (lastPointer) {
+        updateSelectionFromPoint(lastPointer.x, lastPointer.y);
+      } else {
+        refreshOverlay();
+      }
+
+      showToast(`Restored ${latestHiddenAction.label}.`, 'success');
+      return;
+    }
+
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'UNDO_LAST_CAPTURE',
@@ -333,7 +378,7 @@ function createSelectorController() {
         return;
       }
 
-      restoreHiddenCapture(response.data.removedId);
+      restoreHiddenAction(response.data.removedId);
 
       if (lastPointer) {
         updateSelectionFromPoint(lastPointer.x, lastPointer.y);
@@ -352,29 +397,37 @@ function createSelectorController() {
     }
   }
 
-  function hideCapturedElement(element: Element, captureId: string) {
+  function hideElementPreservingSpace(
+    element: Element,
+    actionId: string,
+    source: 'capture' | 'hide',
+    label: string,
+  ) {
     const hideableElement = toHideableElement(element);
     if (!hideableElement) {
-      return;
+      return false;
     }
 
-    hiddenCaptureHistory.push({
-      captureId,
+    hiddenActionHistory.push({
+      actionId,
+      source,
+      label,
       element: hideableElement,
       previousVisibility: hideableElement.style.getPropertyValue('visibility'),
       previousPriority: hideableElement.style.getPropertyPriority('visibility'),
     });
     hideableElement.style.setProperty('visibility', 'hidden', 'important');
+    return true;
   }
 
-  function restoreHiddenCapture(captureId: string) {
-    for (let index = hiddenCaptureHistory.length - 1; index >= 0; index -= 1) {
-      const entry = hiddenCaptureHistory[index];
-      if (entry.captureId !== captureId) {
+  function restoreHiddenAction(actionId: string) {
+    for (let index = hiddenActionHistory.length - 1; index >= 0; index -= 1) {
+      const entry = hiddenActionHistory[index];
+      if (entry.actionId !== actionId) {
         continue;
       }
 
-      hiddenCaptureHistory.splice(index, 1);
+      hiddenActionHistory.splice(index, 1);
       if (!entry.element.isConnected) {
         return;
       }
@@ -588,12 +641,15 @@ function validateSelection(selection: SelectionRect): string | null {
 
 function isSelectorControlMessage(
   message: unknown,
-): message is Extract<ExtensionMessage, { type: 'START_SELECTION' | 'STOP_SELECTION' }> {
+): message is { type: 'START_SELECTION'; mode: SelectionMode } | { type: 'STOP_SELECTION' } {
   return (
     typeof message === 'object' &&
     message !== null &&
     'type' in message &&
-    (message.type === 'START_SELECTION' || message.type === 'STOP_SELECTION')
+    ((message.type === 'START_SELECTION' &&
+      'mode' in message &&
+      (message.mode === 'capture' || message.mode === 'hide')) ||
+      message.type === 'STOP_SELECTION')
   );
 }
 
@@ -618,6 +674,14 @@ function toHideableElement(element: Element): HideableElement | null {
   }
 
   return null;
+}
+
+function getSelectionModeMessage(mode: SelectionMode): string {
+  if (mode === 'hide') {
+    return 'Hide mode is active. Hover, click to hide, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
+  }
+
+  return 'Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
 }
 
 function clamp(value: number, min: number, max: number): number {
