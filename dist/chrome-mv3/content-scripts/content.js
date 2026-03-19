@@ -22,14 +22,14 @@ var content=(function(){function e(e){return e}var t=globalThis.browser?.runtime
           <label class="motion-text-modal__field">
             <span class="motion-text-modal__label">Fragment to export</span>
             <input class="motion-text-modal__input" data-role="fragment-input" type="text" />
-            <span class="motion-text-modal__hint">Use the exact visible substring, for example <code>2.144,57</code>.</span>
+            <span class="motion-text-modal__hint">Use the exact visible substring, for example <code>INV-2048</code>, <code>Alex Morgan</code>, or <code>Paid</code>.</span>
           </label>
           <details class="motion-text-modal__help" open>
             <summary>Help</summary>
             <div class="motion-text-modal__help-copy">
-              <p><strong>Detected full text</strong> is the raw text found inside the element you clicked. It helps you confirm the fragment exists.</p>
-              <p><strong>Fragment to export</strong> should be only the characters you want to animate in Remotion. If you want to keep <code>R$</code> on the screenshot, enter only the numeric part.</p>
-              <p><strong>What gets saved</strong>: exact fragment bounds, per-line rects, page coordinates, and typography styles such as font family, size, weight, line height, letter spacing, and color.</p>
+              <p><strong>Detected full text</strong> shows the raw text found inside the element you clicked. Use it to verify the fragment exists exactly as typed.</p>
+              <p><strong>Fragment to export</strong> should contain only the changing or animatable part of the label. Examples: from <code>Invoice INV-2048</code>, export <code>INV-2048</code>; from <code>Assigned to Alex Morgan</code>, export <code>Alex Morgan</code>; from <code>Status: Paid</code>, export <code>Paid</code>.</p>
+              <p><strong>What gets saved</strong>: exact fragment bounds, per-line rects, page coordinates, and typography styles such as font family, size, weight, line height, letter spacing, color, alignment, and decoration.</p>
             </div>
           </details>
         </div>

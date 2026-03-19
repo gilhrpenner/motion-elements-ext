@@ -387,7 +387,7 @@ function buildLlmGuide() {
     purpose:
       'This export package describes visual UI elements and measured text fragments so an LLM can recreate, animate, or augment the captured screen in tools like Remotion.',
     recommendedPrompt:
-      'Treat each item as measured UI data from a real screen. Preserve absolute geometry first, then preserve typography and color. For `capture` items, use the screenshot asset as the visual source and position it using page coordinates. For `text-fragment` items, render the fragment text separately using the exported font and color properties, and place it using `pageX`, `pageY`, `width`, `height`, plus `fragmentRects` if you need per-line or per-character animation scaffolding. When the captured screen contains a prefix like `R$` that stays visible in the screenshot, animate only the exported fragment text rather than replacing the whole text node.',
+      'Treat each item as measured UI data from a real screen. Preserve absolute geometry first, then preserve typography and color. For `capture` items, use the screenshot asset as the visual source and position it using page coordinates. For `text-fragment` items, render the fragment text separately using the exported font and color properties, and place it using `pageX`, `pageY`, `width`, `height`, plus `fragmentRects` if you need per-line or per-character animation scaffolding. When only part of a label changes, keep the static context in the screenshot and animate only the exported fragment text.',
     coordinateSystem: {
       page:
         '`pageX` and `pageY` are document coordinates measured from the top-left of the full page, not the viewport.',
@@ -397,22 +397,97 @@ function buildLlmGuide() {
         '`documentWidth` and `documentHeight` describe the full page size so coordinates can be normalized or mapped into a video composition.',
     },
     fieldReference: {
+      id: 'Stable record id for the exported item.',
+      capturedAt: 'ISO timestamp describing when the record was saved.',
       kind:
         '`capture` means an exported JPEG asset. `text-fragment` means a measured substring with no image asset.',
+      pageUrl: 'The page URL at capture time.',
+      pageTitle: 'The document title at capture time.',
+      tagName: 'The lowercase HTML tag name of the clicked element.',
       elementLabel:
         'A short human-readable label derived from id, classes, or text. Useful as a hint, not as a stable selector.',
-      widthHeight:
-        '`width` and `height` describe the measured box of the item itself, not the full page.',
-      fragmentRects:
-        'For `text-fragment`, `fragmentRects` lists one rect per rendered line box. Use this when a fragment wraps onto multiple lines.',
-      typography:
-        '`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `color`, `textAlign`, `textTransform`, and `textDecoration` describe how the fragment looked on screen.',
+      viewportX:
+        'Horizontal position inside the current browser viewport in CSS pixels.',
+      viewportY:
+        'Vertical position inside the current browser viewport in CSS pixels.',
+      pageX:
+        'Horizontal position inside the full page in CSS pixels, including scroll offset.',
+      pageY:
+        'Vertical position inside the full page in CSS pixels, including scroll offset.',
+      width:
+        'Measured width of the exported item itself in CSS pixels.',
+      height:
+        'Measured height of the exported item itself in CSS pixels.',
+      viewportWidth:
+        'Browser viewport width at capture time in CSS pixels.',
+      viewportHeight:
+        'Browser viewport height at capture time in CSS pixels.',
+      documentWidth:
+        'Full document width in CSS pixels. Use this for normalization or mapping into a composition.',
+      documentHeight:
+        'Full document height in CSS pixels. Use this for normalization or mapping into a composition.',
+      bodyWidth:
+        'Measured document body width in CSS pixels.',
+      bodyHeight:
+        'Measured document body height in CSS pixels.',
+      scrollX:
+        'Window horizontal scroll offset at capture time.',
+      scrollY:
+        'Window vertical scroll offset at capture time.',
+      devicePixelRatio:
+        'Browser device pixel ratio at capture time.',
       imageFile:
-        'For `capture` items only, `imageFile` points to the JPEG inside the ZIP.',
+        'For `capture` items only, the relative path to the JPEG inside the ZIP.',
+      fullText:
+        'For `text-fragment` items only, the full text found inside the clicked element before extracting the fragment.',
+      fragmentText:
+        'For `text-fragment` items only, the exact substring the user chose to animate or rebuild separately.',
+      fragmentStart:
+        'For `text-fragment` items only, the inclusive start index of `fragmentText` inside `fullText`.',
+      fragmentEnd:
+        'For `text-fragment` items only, the exclusive end index of `fragmentText` inside `fullText`.',
+      fragmentRects:
+        'For `text-fragment` items only, one measured rect per rendered line box of the fragment.',
+      fontFamily: 'Computed CSS font-family for the text fragment.',
+      fontSize: 'Computed CSS font-size for the text fragment.',
+      fontWeight: 'Computed CSS font-weight for the text fragment.',
+      fontStyle: 'Computed CSS font-style for the text fragment.',
+      lineHeight: 'Computed CSS line-height for the text fragment.',
+      letterSpacing: 'Computed CSS letter-spacing for the text fragment.',
+      color: 'Computed CSS text color for the text fragment.',
+      textAlign: 'Computed CSS text-align for the text fragment container.',
+      textTransform: 'Computed CSS text-transform for the text fragment.',
+      textDecoration: 'Computed CSS text-decoration for the text fragment.',
+    },
+    textFragmentExamples: [
+      {
+        fullText: 'Invoice INV-2048',
+        fragmentText: 'INV-2048',
+        explanation:
+          'Use this when only the order number should animate while the word "Invoice" stays in the screenshot.',
+      },
+      {
+        fullText: 'Assigned to Alex Morgan',
+        fragmentText: 'Alex Morgan',
+        explanation:
+          'Use this when a person name changes but the surrounding sentence should remain visible.',
+      },
+      {
+        fullText: 'Status: Paid',
+        fragmentText: 'Paid',
+        explanation:
+          'Use this when only the status value should animate or transition.',
+      },
+    ],
+    remotionUsage: {
+      captures:
+        'Use capture items as positioned image layers.',
+      textFragments:
+        'Use text-fragment items as separate text layers with exported typography. Prefer `fragmentRects` when a fragment wraps across lines.',
     },
     usageTips: [
       'If you need percentage-based placement, divide `pageX` by `documentWidth` and `pageY` by `documentHeight`.',
-      'If a text fragment contains only the changing numeric portion of a label, keep the static prefix in the base screenshot and animate only the fragment.',
+      'If a text fragment contains only the changing portion of a label, keep the static context in the base screenshot and animate only the fragment.',
       'Prefer exported typography over guessed styles when rebuilding text in Remotion.',
     ],
   };
@@ -428,6 +503,39 @@ Use this package as measured UI data from a real screen.
 - \`items\` contains every exported session item.
 - \`kind: "capture"\` means the item has a matching JPEG asset referenced by \`imageFile\`.
 - \`kind: "text-fragment"\` means the item is measured text metadata with no image asset.
+
+## What each property means
+
+- \`id\`: Stable id for this exported item.
+- \`capturedAt\`: ISO timestamp for when the item was saved.
+- \`kind\`: Either \`capture\` or \`text-fragment\`.
+- \`pageUrl\`: URL of the page where the item was collected.
+- \`pageTitle\`: Browser page title at collection time.
+- \`tagName\`: Lowercase HTML tag name of the clicked element.
+- \`elementLabel\`: Human-readable hint derived from classes, id, or nearby text.
+- \`viewportX\` / \`viewportY\`: Position in the visible viewport in CSS pixels.
+- \`pageX\` / \`pageY\`: Position in the full page in CSS pixels, including scroll offset.
+- \`width\` / \`height\`: Size of the exported item itself in CSS pixels.
+- \`viewportWidth\` / \`viewportHeight\`: Browser viewport size at collection time.
+- \`documentWidth\` / \`documentHeight\`: Full page size at collection time.
+- \`bodyWidth\` / \`bodyHeight\`: Measured body size at collection time.
+- \`scrollX\` / \`scrollY\`: Window scroll offsets at collection time.
+- \`devicePixelRatio\`: Browser DPR at collection time.
+- \`imageFile\`: Present only on \`capture\` items. Relative path to the JPEG in the ZIP.
+- \`fullText\`: Present only on \`text-fragment\` items. Full text found inside the clicked element.
+- \`fragmentText\`: Present only on \`text-fragment\` items. Exact substring selected for animation or recreation.
+- \`fragmentStart\` / \`fragmentEnd\`: Start-inclusive, end-exclusive substring indices inside \`fullText\`.
+- \`fragmentRects\`: Present only on \`text-fragment\` items. One measured rect per rendered line box.
+- \`fontFamily\`: Computed CSS font-family.
+- \`fontSize\`: Computed CSS font-size.
+- \`fontWeight\`: Computed CSS font-weight.
+- \`fontStyle\`: Computed CSS font-style.
+- \`lineHeight\`: Computed CSS line-height.
+- \`letterSpacing\`: Computed CSS letter-spacing.
+- \`color\`: Computed CSS text color.
+- \`textAlign\`: Computed CSS text-align.
+- \`textTransform\`: Computed CSS text-transform.
+- \`textDecoration\`: Computed CSS text-decoration.
 
 ## Coordinate model
 
@@ -449,6 +557,12 @@ Use this package as measured UI data from a real screen.
 - \`fragmentStart\` and \`fragmentEnd\` are substring indices inside \`fullText\`.
 - \`fragmentRects\` contains one rect per rendered line box.
 - Typography props describe the on-screen appearance and should be used when rebuilding text in Remotion.
+
+## Dynamic text examples
+
+- \`fullText: "Invoice INV-2048"\`, \`fragmentText: "INV-2048"\`
+- \`fullText: "Assigned to Alex Morgan"\`, \`fragmentText: "Alex Morgan"\`
+- \`fullText: "Status: Paid"\`, \`fragmentText: "Paid"\`
 
 ## Recommended LLM behavior
 
