@@ -17,64 +17,98 @@ if (!app) {
 
 app.innerHTML = `
   <main class="shell">
-    <section class="hero">
-      <p class="eyebrow">Motion Element Capture</p>
-      <h1>Capture the exact UI fragments you want to animate.</h1>
-      <p class="subhead">
-        Start capture, hide, or blur mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to act, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last local change or capture.
-      </p>
-      <div class="hero-row">
-        <div>
-          <p class="metric-label">Session</p>
-          <p class="metric-value" id="capture-count">0 captures</p>
-        </div>
-        <div class="status-pill" id="tab-status">Checking tab…</div>
+    <header class="header">
+      <div class="header-icon">&#9670;</div>
+      <div class="header-text">
+        <h1 class="header-title">Motion Capture</h1>
+        <p class="header-sub" id="tab-status">checking tab…</p>
+      </div>
+      <div class="status-dot" id="status-dot"></div>
+    </header>
+
+    <div class="stats-bar">
+      <div class="stat">
+        <p class="stat-value" id="capture-count">0</p>
+        <p class="stat-label">Captures</p>
+      </div>
+      <div class="stat">
+        <p class="stat-value" id="session-status">—</p>
+        <p class="stat-label">Status</p>
+      </div>
+    </div>
+
+    <section class="mode-section">
+      <p class="mode-label">Select Mode</p>
+      <div class="mode-grid">
+        <button class="mode-btn" data-mode="capture" id="start-selection" type="button">
+          <span class="mode-icon">&#9673;</span>
+          Capture
+        </button>
+        <button class="mode-btn" data-mode="hide" id="hide-selection" type="button">
+          <span class="mode-icon">&#9675;</span>
+          Hide
+        </button>
+        <button class="mode-btn" data-mode="blur" id="blur-selection" type="button">
+          <span class="mode-icon">&#9678;</span>
+          Blur
+        </button>
       </div>
     </section>
 
-    <section class="panel">
-      <div class="actions">
-        <button class="primary" id="start-selection" type="button">Start Capture</button>
-        <button class="secondary" id="hide-selection" type="button">Hide Element</button>
-      </div>
-      <div class="actions">
-        <button class="secondary" id="blur-selection" type="button">Blur Element</button>
-        <button class="secondary" id="stop-selection" type="button">Stop</button>
-      </div>
-      <div class="actions">
-        <button class="secondary" id="export-session" type="button">Export ZIP</button>
-        <button class="ghost" id="clear-session" type="button">Clear Session</button>
-      </div>
+    <div class="action-bar">
+      <button class="action-btn action-btn--stop" id="stop-selection" type="button">Stop</button>
+      <button class="action-btn action-btn--export" id="export-session" type="button">Export</button>
+      <button class="action-btn action-btn--clear" id="clear-session" type="button">Clear</button>
+    </div>
+
+    <div class="toggles">
       <label class="toggle-row" for="hide-after-capture">
         <span>
           <strong>Hide after capture</strong>
-          <small>Keep the layout space but hide the captured element on the page.</small>
+          <small>Preserve layout space, hide the element visually.</small>
         </span>
-        <input id="hide-after-capture" type="checkbox" />
+        <div class="toggle-switch">
+          <input id="hide-after-capture" type="checkbox" />
+          <span class="slider"></span>
+        </div>
       </label>
       <label class="toggle-row" for="suppress-hover-state">
         <span>
-          <strong>Suppress hover state</strong>
-          <small>Temporarily remove hover-driven effects before the screenshot is taken.</small>
+          <strong>Suppress hover</strong>
+          <small>Remove hover effects before screenshot.</small>
         </span>
-        <input id="suppress-hover-state" type="checkbox" />
+        <div class="toggle-switch">
+          <input id="suppress-hover-state" type="checkbox" />
+          <span class="slider"></span>
+        </div>
       </label>
-      <p class="status-message" id="status-message">Ready.</p>
-    </section>
+    </div>
 
-    <section class="panel">
-      <div class="section-head">
-        <h2>Captured Elements</h2>
-        <span class="hint">Persisted locally until you clear or export them.</span>
+    <div class="status-bar">
+      <p class="status-message" id="status-message">Ready.</p>
+    </div>
+
+    <section class="captures-section">
+      <div class="captures-header">
+        <h2>Captures</h2>
+        <span class="hint" id="captures-hint">local storage</span>
       </div>
       <ul class="capture-list" id="capture-list"></ul>
-      <p class="empty-state" id="empty-state">No captures yet. Start selection mode on your app, hover an element, and click it.</p>
+      <p class="empty-state" id="empty-state">No captures yet — select a mode above to start.</p>
     </section>
+
+    <div class="kb-hints">
+      <span class="kb-hint"><kbd>[</kbd><kbd>]</kbd> depth</span>
+      <span class="kb-hint"><kbd>&#8984;</kbd><kbd>Z</kbd> undo</span>
+      <span class="kb-hint">click to act</span>
+    </div>
   </main>
 `;
 
 const captureCount = requiredElement<HTMLParagraphElement>('capture-count');
-const tabStatus = requiredElement<HTMLDivElement>('tab-status');
+const tabStatus = requiredElement<HTMLParagraphElement>('tab-status');
+const statusDot = requiredElement<HTMLDivElement>('status-dot');
+const sessionStatus = requiredElement<HTMLParagraphElement>('session-status');
 const statusMessage = requiredElement<HTMLParagraphElement>('status-message');
 const captureList = requiredElement<HTMLUListElement>('capture-list');
 const emptyState = requiredElement<HTMLParagraphElement>('empty-state');
@@ -91,6 +125,18 @@ const suppressHoverStateToggle =
 let currentTabId: number | null = null;
 let tabIsScriptable = false;
 let currentSessionCount = 0;
+let activeMode: 'capture' | 'hide' | 'blur' | null = null;
+
+const modeButtons = { capture: startButton, hide: hideButton, blur: blurButton };
+
+function setActiveMode(mode: 'capture' | 'hide' | 'blur' | null) {
+  activeMode = mode;
+  for (const [key, btn] of Object.entries(modeButtons)) {
+    btn.classList.toggle('mode-btn--active', key === mode);
+  }
+  stopButton.classList.toggle('action-btn--live', mode !== null);
+  syncActionAvailability();
+}
 
 startButton.addEventListener('click', async () => {
   const tabId = currentTabId;
@@ -111,7 +157,8 @@ startButton.addEventListener('click', async () => {
       return;
     }
 
-    setStatus('Selection mode started on the current page.');
+    setActiveMode('capture');
+    setStatus('Capture mode active.');
   });
 });
 
@@ -134,7 +181,8 @@ hideButton.addEventListener('click', async () => {
       return;
     }
 
-    setStatus('Hide mode started on the current page.');
+    setActiveMode('hide');
+    setStatus('Hide mode active.');
   });
 });
 
@@ -157,7 +205,8 @@ blurButton.addEventListener('click', async () => {
       return;
     }
 
-    setStatus('Blur mode started on the current page.');
+    setActiveMode('blur');
+    setStatus('Blur mode active.');
   });
 });
 
@@ -179,7 +228,8 @@ stopButton.addEventListener('click', async () => {
       return;
     }
 
-    setStatus('Selection mode stopped.');
+    setActiveMode(null);
+    setStatus('Stopped.');
   });
 });
 
@@ -253,13 +303,23 @@ async function initialize() {
     hideAfterCaptureToggle.checked = await getHideAfterCaptureSetting();
     suppressHoverStateToggle.checked = await getSuppressHoverStateSetting();
 
-    tabStatus.textContent = tabIsScriptable ? 'Scriptable tab' : 'Unsupported tab';
-    tabStatus.dataset.tone = tabIsScriptable ? 'ready' : 'error';
+    tabStatus.textContent = tabIsScriptable ? 'scriptable tab' : 'unsupported tab';
+    statusDot.dataset.tone = tabIsScriptable ? 'ready' : 'error';
 
     if (!tabIsScriptable) {
       setStatus(getUnsupportedTabMessage(tab?.url), true);
     } else {
       setStatus('Ready.');
+    }
+
+    if (tabIsScriptable && currentTabId != null) {
+      const modeResponse = await sendMessage<{ mode: 'capture' | 'hide' | 'blur' | null }>({
+        type: 'GET_ACTIVE_MODE',
+        tabId: currentTabId,
+      });
+      if (modeResponse.ok && modeResponse.data.mode) {
+        setActiveMode(modeResponse.data.mode);
+      }
     }
 
     syncActionAvailability();
@@ -282,7 +342,8 @@ async function refreshSession() {
 
 function renderSession(session: SessionSummary) {
   currentSessionCount = session.count;
-  captureCount.textContent = `${session.count} capture${session.count === 1 ? '' : 's'}`;
+  captureCount.textContent = `${session.count}`;
+  sessionStatus.textContent = session.count > 0 ? 'active' : '—';
   syncActionAvailability();
   captureList.innerHTML = '';
 
@@ -314,14 +375,16 @@ function renderCapture(
   item.innerHTML = `
     <div class="capture-top">
       <div>
-        <p class="capture-title">${escapeHtml(capture.tagName)}</p>
+        <p class="capture-tag"><span class="capture-tag-name">&lt;${escapeHtml(capture.tagName.toLowerCase())}&gt;</span></p>
         <p class="capture-label">${escapeHtml(capture.elementLabel)}</p>
       </div>
       <span class="capture-time">${timeFormatter.format(new Date(capture.capturedAt))}</span>
     </div>
-    <p class="capture-meta">${Math.round(capture.width)}×${Math.round(capture.height)} px</p>
-    <p class="capture-meta">Page ${Math.round(capture.pageX)}, ${Math.round(capture.pageY)} · Viewport ${Math.round(capture.viewportX)}, ${Math.round(capture.viewportY)}</p>
-    <p class="capture-meta capture-url">${escapeHtml(capture.pageTitle || capture.pageUrl)}</p>
+    <div class="capture-details">
+      <p class="capture-meta">${Math.round(capture.width)}×${Math.round(capture.height)}</p>
+      <p class="capture-meta">@${Math.round(capture.viewportX)},${Math.round(capture.viewportY)}</p>
+    </div>
+    <p class="capture-url">${escapeHtml(capture.pageTitle || capture.pageUrl)}</p>
   `;
 
   return item;
@@ -344,7 +407,7 @@ function syncActionAvailability(busy = false) {
   startButton.disabled = busy || !tabIsScriptable;
   hideButton.disabled = busy || !tabIsScriptable;
   blurButton.disabled = busy || !tabIsScriptable;
-  stopButton.disabled = busy || !tabIsScriptable;
+  stopButton.disabled = busy || !tabIsScriptable || activeMode === null;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;
 }

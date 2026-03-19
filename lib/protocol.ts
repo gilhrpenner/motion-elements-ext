@@ -61,6 +61,7 @@ export type ExtensionMessage =
   | { type: 'STOP_SELECTION'; tabId: number }
   | { type: 'CAPTURE_ELEMENT'; selection: SelectionRect }
   | { type: 'GET_SESSION' }
+  | { type: 'GET_ACTIVE_MODE'; tabId: number }
   | { type: 'UNDO_LAST_CAPTURE' }
   | { type: 'CLEAR_SESSION' }
   | { type: 'EXPORT_SESSION' };

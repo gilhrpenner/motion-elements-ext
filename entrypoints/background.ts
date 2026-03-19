@@ -28,6 +28,8 @@ type SelectorControlMessage =
   | { type: 'START_SELECTION'; mode: SelectionMode }
   | { type: 'STOP_SELECTION' };
 
+const activeModeByTab = new Map<number, SelectionMode>();
+
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isExtensionMessage(message)) {
@@ -61,6 +63,8 @@ async function handleMessage(
       return captureElement(message.selection, sender);
     case 'GET_SESSION':
       return ok(await getSessionSummary());
+    case 'GET_ACTIVE_MODE':
+      return ok({ mode: activeModeByTab.get(message.tabId) ?? null });
     case 'UNDO_LAST_CAPTURE':
       return undoLastCapture();
     case 'CLEAR_SESSION':
@@ -116,6 +120,7 @@ async function startSelection(
     }
   }
 
+  activeModeByTab.set(tabId, mode);
   return ok({ tabId });
 }
 
@@ -128,6 +133,7 @@ async function stopSelection(tabId: number): Promise<ExtensionResponse<{ tabId: 
     }
   }
 
+  activeModeByTab.delete(tabId);
   return ok({ tabId });
 }
 
