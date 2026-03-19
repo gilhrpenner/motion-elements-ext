@@ -18,6 +18,9 @@ declare global {
 type SelectorController = ReturnType<typeof createSelectorController>;
 type Tone = 'info' | 'success' | 'error';
 type HideableElement = HTMLElement | SVGElement;
+interface TextFragmentDialogResult {
+  fragmentText: string | null;
+}
 const BLUR_FILTER_VALUE = 'blur(8px)';
 
 export default defineContentScript({
@@ -42,6 +45,7 @@ function createSelectorController() {
   let overlayLabel: HTMLDivElement | null = null;
   let toast: HTMLDivElement | null = null;
   let captureStyle: HTMLStyleElement | null = null;
+  let modalStyle: HTMLStyleElement | null = null;
   let lastPointer: { x: number; y: number } | null = null;
   const hiddenActionHistory: Array<{
     actionId: string;
@@ -512,17 +516,17 @@ function createSelectorController() {
 
     const fullText = segments.map((segment) => segment.text).join('');
     const defaultFragment = getPreferredTextFragment(fullText);
-    const fragmentInput = window.prompt(
-      'Enter the exact text fragment to extract for animation:',
+    const dialogResult = await openTextFragmentDialog({
+      fullText,
       defaultFragment,
-    );
+    });
 
-    if (fragmentInput == null) {
+    if (dialogResult.fragmentText == null) {
       showToast('Text fragment capture cancelled.', 'info');
       return null;
     }
 
-    const fragmentText = fragmentInput.trim();
+    const fragmentText = dialogResult.fragmentText.trim();
     if (!fragmentText) {
       showToast('Enter a non-empty text fragment.', 'error');
       return null;
@@ -653,6 +657,262 @@ function createSelectorController() {
       toast.hidden = true;
       document.documentElement.append(toast);
     }
+  }
+
+  async function openTextFragmentDialog({
+    fullText,
+    defaultFragment,
+  }: {
+    fullText: string;
+    defaultFragment: string;
+  }): Promise<TextFragmentDialogResult> {
+    ensureModalStyle();
+
+    return new Promise((resolve) => {
+      const backdrop = document.createElement('div');
+      backdrop.id = '__motion-element-capture-text-modal';
+      Object.assign(backdrop.style, {
+        position: 'fixed',
+        inset: '0',
+        zIndex: '2147483647',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+        background: 'rgba(2, 6, 23, 0.6)',
+        backdropFilter: 'blur(8px)',
+      });
+
+      const modal = document.createElement('div');
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      Object.assign(modal.style, {
+        width: 'min(520px, 100%)',
+        maxHeight: 'min(80vh, 720px)',
+        overflow: 'auto',
+        borderRadius: '18px',
+        background: '#0f172a',
+        color: '#e2e8f0',
+        border: '1px solid rgba(148, 163, 184, 0.22)',
+        boxShadow: '0 30px 80px rgba(2, 6, 23, 0.45)',
+        fontFamily: '"IBM Plex Sans", "Segoe UI", sans-serif',
+      });
+
+      modal.innerHTML = `
+        <div class="motion-text-modal__header">
+          <div>
+            <p class="motion-text-modal__eyebrow">Text Fragment</p>
+            <h2 class="motion-text-modal__title">Measure the exact text you want to animate</h2>
+          </div>
+          <button class="motion-text-modal__close" type="button" data-role="cancel" aria-label="Close">×</button>
+        </div>
+        <div class="motion-text-modal__body">
+          <label class="motion-text-modal__field">
+            <span class="motion-text-modal__label">Detected full text</span>
+            <textarea class="motion-text-modal__textarea" data-role="full-text" readonly></textarea>
+          </label>
+          <label class="motion-text-modal__field">
+            <span class="motion-text-modal__label">Fragment to export</span>
+            <input class="motion-text-modal__input" data-role="fragment-input" type="text" />
+            <span class="motion-text-modal__hint">Use the exact visible substring, for example <code>2.144,57</code>.</span>
+          </label>
+          <details class="motion-text-modal__help" open>
+            <summary>Help</summary>
+            <div class="motion-text-modal__help-copy">
+              <p><strong>Detected full text</strong> is the raw text found inside the element you clicked. It helps you confirm the fragment exists.</p>
+              <p><strong>Fragment to export</strong> should be only the characters you want to animate in Remotion. If you want to keep <code>R$</code> on the screenshot, enter only the numeric part.</p>
+              <p><strong>What gets saved</strong>: exact fragment bounds, per-line rects, page coordinates, and typography styles such as font family, size, weight, line height, letter spacing, and color.</p>
+            </div>
+          </details>
+        </div>
+        <div class="motion-text-modal__footer">
+          <button class="motion-text-modal__button motion-text-modal__button--secondary" type="button" data-role="cancel">Cancel</button>
+          <button class="motion-text-modal__button motion-text-modal__button--primary" type="button" data-role="save">Save fragment</button>
+        </div>
+      `;
+
+      const fullTextArea = modal.querySelector<HTMLTextAreaElement>('[data-role="full-text"]');
+      const fragmentInput = modal.querySelector<HTMLInputElement>('[data-role="fragment-input"]');
+      const saveButton = modal.querySelector<HTMLButtonElement>('[data-role="save"]');
+      const cancelButtons = modal.querySelectorAll<HTMLElement>('[data-role="cancel"]');
+
+      if (!fullTextArea || !fragmentInput || !saveButton) {
+        resolve({ fragmentText: null });
+        return;
+      }
+
+      fullTextArea.value = fullText;
+      fragmentInput.value = defaultFragment;
+
+      const cleanup = () => {
+        backdrop.remove();
+        document.removeEventListener('keydown', onKeyDown, true);
+      };
+
+      const finish = (fragmentText: string | null) => {
+        cleanup();
+        resolve({ fragmentText });
+      };
+
+      const onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+        }
+      };
+
+      saveButton.addEventListener('click', () => finish(fragmentInput.value));
+      for (const button of cancelButtons) {
+        button.addEventListener('click', () => finish(null));
+      }
+      backdrop.addEventListener('click', (event) => {
+        if (event.target === backdrop) {
+          finish(null);
+        }
+      });
+
+      document.addEventListener('keydown', onKeyDown, true);
+      backdrop.append(modal);
+      document.documentElement.append(backdrop);
+      fragmentInput.focus();
+      fragmentInput.select();
+    });
+  }
+
+  function ensureModalStyle() {
+    if (modalStyle) {
+      return;
+    }
+
+    modalStyle = document.createElement('style');
+    modalStyle.id = '__motion-element-capture-modal-style';
+    modalStyle.textContent = `
+      #__motion-element-capture-text-modal .motion-text-modal__header,
+      #__motion-element-capture-text-modal .motion-text-modal__footer,
+      #__motion-element-capture-text-modal .motion-text-modal__body {
+        padding: 18px 20px;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__eyebrow {
+        margin: 0 0 4px;
+        color: #86efac;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__title {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.15;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__close {
+        border: 0;
+        background: transparent;
+        color: #94a3b8;
+        font-size: 28px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__body {
+        display: grid;
+        gap: 16px;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__field {
+        display: grid;
+        gap: 8px;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__label {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__textarea,
+      #__motion-element-capture-text-modal .motion-text-modal__input {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: rgba(15, 23, 42, 0.75);
+        color: #f8fafc;
+        padding: 12px 14px;
+        font: 500 14px/1.4 "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__textarea {
+        min-height: 88px;
+        resize: vertical;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__hint {
+        color: #94a3b8;
+        font-size: 12px;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__help {
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.55);
+        padding: 12px 14px;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__help summary {
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__help-copy {
+        margin-top: 10px;
+        display: grid;
+        gap: 10px;
+        color: #cbd5e1;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__help-copy p {
+        margin: 0;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 14px;
+        font: 700 13px/1 "IBM Plex Sans", "Segoe UI", sans-serif;
+        cursor: pointer;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__button--secondary {
+        background: rgba(148, 163, 184, 0.12);
+        color: #e2e8f0;
+      }
+
+      #__motion-element-capture-text-modal .motion-text-modal__button--primary {
+        background: #22c55e;
+        color: #052e16;
+      }
+    `;
+    document.documentElement.append(modalStyle);
   }
 
   function getSelectedElement(): Element | null {

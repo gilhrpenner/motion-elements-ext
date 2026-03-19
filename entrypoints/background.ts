@@ -256,7 +256,7 @@ async function exportSession(): Promise<
     const imageFileMap = new Map(
       exportFiles.map(({ capture, imageFile }) => [capture.id, imageFile]),
     );
-    const manifest = records.map((record) => {
+    const items = records.map((record) => {
       if (record.kind === 'capture') {
         const { imageBlob, ...captureMetadata } = record;
 
@@ -269,7 +269,15 @@ async function exportSession(): Promise<
       return record;
     });
 
+    const manifest = {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      llmGuide: buildLlmGuide(),
+      items,
+    };
+
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+    zip.file('LLM_GUIDE.md', buildLlmGuideMarkdown());
     for (const file of exportFiles) {
       zip.file(file.imageFile, file.imageBytes);
     }
@@ -372,6 +380,83 @@ function buildExportImageFilename(capture: CaptureRecord, index: number): string
   const pageHeight = Math.round(capture.documentHeight);
 
   return `${count}_${x}-${y}_${pageWidth}_${pageHeight}.jpg`;
+}
+
+function buildLlmGuide() {
+  return {
+    purpose:
+      'This export package describes visual UI elements and measured text fragments so an LLM can recreate, animate, or augment the captured screen in tools like Remotion.',
+    recommendedPrompt:
+      'Treat each item as measured UI data from a real screen. Preserve absolute geometry first, then preserve typography and color. For `capture` items, use the screenshot asset as the visual source and position it using page coordinates. For `text-fragment` items, render the fragment text separately using the exported font and color properties, and place it using `pageX`, `pageY`, `width`, `height`, plus `fragmentRects` if you need per-line or per-character animation scaffolding. When the captured screen contains a prefix like `R$` that stays visible in the screenshot, animate only the exported fragment text rather than replacing the whole text node.',
+    coordinateSystem: {
+      page:
+        '`pageX` and `pageY` are document coordinates measured from the top-left of the full page, not the viewport.',
+      viewport:
+        '`viewportX` and `viewportY` are measured in the visible browser viewport at capture time.',
+      pageSize:
+        '`documentWidth` and `documentHeight` describe the full page size so coordinates can be normalized or mapped into a video composition.',
+    },
+    fieldReference: {
+      kind:
+        '`capture` means an exported JPEG asset. `text-fragment` means a measured substring with no image asset.',
+      elementLabel:
+        'A short human-readable label derived from id, classes, or text. Useful as a hint, not as a stable selector.',
+      widthHeight:
+        '`width` and `height` describe the measured box of the item itself, not the full page.',
+      fragmentRects:
+        'For `text-fragment`, `fragmentRects` lists one rect per rendered line box. Use this when a fragment wraps onto multiple lines.',
+      typography:
+        '`fontFamily`, `fontSize`, `fontWeight`, `fontStyle`, `lineHeight`, `letterSpacing`, `color`, `textAlign`, `textTransform`, and `textDecoration` describe how the fragment looked on screen.',
+      imageFile:
+        'For `capture` items only, `imageFile` points to the JPEG inside the ZIP.',
+    },
+    usageTips: [
+      'If you need percentage-based placement, divide `pageX` by `documentWidth` and `pageY` by `documentHeight`.',
+      'If a text fragment contains only the changing numeric portion of a label, keep the static prefix in the base screenshot and animate only the fragment.',
+      'Prefer exported typography over guessed styles when rebuilding text in Remotion.',
+    ],
+  };
+}
+
+function buildLlmGuideMarkdown(): string {
+  return `# LLM Guide
+
+Use this package as measured UI data from a real screen.
+
+## How to read the export
+
+- \`items\` contains every exported session item.
+- \`kind: "capture"\` means the item has a matching JPEG asset referenced by \`imageFile\`.
+- \`kind: "text-fragment"\` means the item is measured text metadata with no image asset.
+
+## Coordinate model
+
+- \`pageX\` and \`pageY\` are absolute page coordinates from the top-left of the full document.
+- \`viewportX\` and \`viewportY\` are coordinates inside the visible browser viewport at capture time.
+- \`documentWidth\` and \`documentHeight\` are the full page dimensions. Use them to normalize positions for video compositions.
+- \`width\` and \`height\` are the item's own measured box, not the page size.
+
+## Capture items
+
+- Use \`imageFile\` as the visual asset.
+- Place the image using page coordinates first.
+- Keep the original page proportions using the exported document dimensions.
+
+## Text fragment items
+
+- \`fullText\` is the full text inside the clicked element.
+- \`fragmentText\` is the exact substring the user wants to animate separately.
+- \`fragmentStart\` and \`fragmentEnd\` are substring indices inside \`fullText\`.
+- \`fragmentRects\` contains one rect per rendered line box.
+- Typography props describe the on-screen appearance and should be used when rebuilding text in Remotion.
+
+## Recommended LLM behavior
+
+1. Recreate the base screen using capture items.
+2. Render text-fragment items as separate text layers.
+3. Keep static prefixes or surrounding UI in the screenshot layer when only the changing substring should animate.
+4. Preserve typography and color before adding stylization.
+`;
 }
 
 async function createDownloadUrl(blob: Blob): Promise<string> {
