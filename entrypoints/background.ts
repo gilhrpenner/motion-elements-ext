@@ -6,20 +6,26 @@ import {
   type CaptureRecord,
   type ExtensionMessage,
   type ExtensionResponse,
+  isCaptureRecord,
   type SelectionMode,
+  type SessionRecord,
   SELECTOR_SCRIPT_PATH,
   type SelectionRect,
+  type TextFragmentDraft,
+  type TextFragmentRecord,
   fail,
   isExtensionMessage,
   ok,
-  toCaptureSummary,
+  toSessionItemSummary,
 } from '@/lib/protocol';
 import {
   clearCaptures,
-  deleteLatestCapture,
+  deleteLatestSessionRecord,
   getCaptureRecords,
+  getSessionRecords,
   getSessionSummary,
   saveCapture,
+  saveTextFragment,
 } from '@/lib/session-db';
 import { getUnsupportedTabMessage, isScriptableUrl } from '@/lib/tab';
 
@@ -27,7 +33,6 @@ type MessageSender = Browser.runtime.MessageSender;
 type SelectorControlMessage =
   | { type: 'START_SELECTION'; mode: SelectionMode }
   | { type: 'STOP_SELECTION' };
-
 const activeModeByTab = new Map<number, SelectionMode>();
 
 export default defineBackground(() => {
@@ -61,12 +66,14 @@ async function handleMessage(
       return stopSelection(message.tabId);
     case 'CAPTURE_ELEMENT':
       return captureElement(message.selection, sender);
+    case 'SAVE_TEXT_FRAGMENT':
+      return saveMeasuredTextFragment(message.fragment);
     case 'GET_SESSION':
       return ok(await getSessionSummary());
     case 'GET_ACTIVE_MODE':
       return ok({ mode: activeModeByTab.get(message.tabId) ?? null });
     case 'UNDO_LAST_CAPTURE':
-      return undoLastCapture();
+      return undoLastSessionRecord();
     case 'CLEAR_SESSION':
       await clearCaptures();
       return ok(await getSessionSummary());
@@ -77,18 +84,24 @@ async function handleMessage(
   }
 }
 
-async function undoLastCapture(): Promise<
-  ExtensionResponse<{ removedId: string; removedLabel: string; count: number }>
+async function undoLastSessionRecord(): Promise<
+  ExtensionResponse<{
+    removedId: string;
+    removedLabel: string;
+    removedKind: SessionRecord['kind'];
+    count: number;
+  }>
 > {
-  const removedCapture = await deleteLatestCapture();
-  if (!removedCapture) {
-    return fail('There are no captures to undo.');
+  const removedRecord = await deleteLatestSessionRecord();
+  if (!removedRecord) {
+    return fail('There are no session items to undo.');
   }
 
   const session = await getSessionSummary();
   return ok({
-    removedId: removedCapture.id,
-    removedLabel: removedCapture.elementLabel,
+    removedId: removedRecord.id,
+    removedLabel: removedRecord.elementLabel,
+    removedKind: removedRecord.kind,
     count: session.count,
   });
 }
@@ -140,7 +153,7 @@ async function stopSelection(tabId: number): Promise<ExtensionResponse<{ tabId: 
 async function captureElement(
   selection: SelectionRect,
   sender: MessageSender,
-): Promise<ExtensionResponse<{ capture: ReturnType<typeof toCaptureSummary> }>> {
+): Promise<ExtensionResponse<{ capture: ReturnType<typeof toSessionItemSummary> }>> {
   const tabId = sender.tab?.id;
   const windowId = sender.tab?.windowId;
 
@@ -167,6 +180,7 @@ async function captureElement(
     const capture: CaptureRecord = {
       id: crypto.randomUUID(),
       capturedAt: new Date().toISOString(),
+      kind: 'capture',
       pageUrl: selection.pageUrl,
       pageTitle: selection.pageTitle,
       tagName: selection.tagName,
@@ -190,7 +204,25 @@ async function captureElement(
     };
 
     await saveCapture(capture);
-    return ok({ capture: toCaptureSummary(capture) });
+    return ok({ capture: toSessionItemSummary(capture) });
+  } catch (error) {
+    return fail(normalizeError(error));
+  }
+}
+
+async function saveMeasuredTextFragment(
+  fragment: TextFragmentDraft,
+): Promise<ExtensionResponse<{ fragment: ReturnType<typeof toSessionItemSummary> }>> {
+  try {
+    const record: TextFragmentRecord = {
+      ...fragment,
+      id: crypto.randomUUID(),
+      capturedAt: new Date().toISOString(),
+      kind: 'text-fragment',
+    };
+
+    await saveTextFragment(record);
+    return ok({ fragment: toSessionItemSummary(record) });
   } catch (error) {
     return fail(normalizeError(error));
   }
@@ -199,13 +231,14 @@ async function captureElement(
 async function exportSession(): Promise<
   ExtensionResponse<{ count: number; filename: string; downloadId: number | undefined }>
 > {
-  const captures = await getCaptureRecords();
-  if (captures.length === 0) {
-    return fail('There are no captures to export yet.');
+  const records = await getSessionRecords();
+  if (records.length === 0) {
+    return fail('There are no session items to export yet.');
   }
 
   try {
     const zip = new JSZip();
+    const captures = records.filter(isCaptureRecord);
     const exportFiles = await Promise.all(
       captures.map(async (capture, index) => {
         const imageFile = `${EXPORT_FOLDER_NAME}/${buildExportImageFilename(
@@ -220,13 +253,20 @@ async function exportSession(): Promise<
         };
       }),
     );
-    const manifest = exportFiles.map(({ capture, imageFile }) => {
-      const { imageBlob, ...captureMetadata } = capture;
+    const imageFileMap = new Map(
+      exportFiles.map(({ capture, imageFile }) => [capture.id, imageFile]),
+    );
+    const manifest = records.map((record) => {
+      if (record.kind === 'capture') {
+        const { imageBlob, ...captureMetadata } = record;
 
-      return {
-        ...captureMetadata,
-        imageFile,
-      };
+        return {
+          ...captureMetadata,
+          imageFile: imageFileMap.get(record.id),
+        };
+      }
+
+      return record;
     });
 
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
@@ -245,7 +285,7 @@ async function exportSession(): Promise<
       saveAs: true,
     });
 
-    return ok({ count: captures.length, filename, downloadId });
+    return ok({ count: records.length, filename, downloadId });
   } catch (error) {
     return fail(normalizeError(error));
   }

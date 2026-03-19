@@ -1,6 +1,12 @@
 import './style.css';
 
-import type { CaptureSummary, ExtensionMessage, ExtensionResponse, SessionSummary } from '@/lib/protocol';
+import type {
+  CaptureSummary,
+  ExtensionMessage,
+  ExtensionResponse,
+  SessionSummary,
+  TextFragmentSummary,
+} from '@/lib/protocol';
 import {
   getHideAfterCaptureSetting,
   getSuppressHoverStateSetting,
@@ -29,7 +35,7 @@ app.innerHTML = `
     <div class="stats-bar">
       <div class="stat">
         <p class="stat-value" id="capture-count">0</p>
-        <p class="stat-label">Captures</p>
+        <p class="stat-label">Items</p>
       </div>
       <div class="stat">
         <p class="stat-value" id="session-status">—</p>
@@ -51,6 +57,10 @@ app.innerHTML = `
         <button class="mode-btn" data-mode="blur" id="blur-selection" type="button">
           <span class="mode-icon">&#9678;</span>
           Blur
+        </button>
+        <button class="mode-btn" data-mode="text" id="text-selection" type="button">
+          <span class="mode-icon">T</span>
+          Text
         </button>
       </div>
     </section>
@@ -90,11 +100,11 @@ app.innerHTML = `
 
     <section class="captures-section">
       <div class="captures-header">
-        <h2>Captures</h2>
+        <h2>Session Items</h2>
         <span class="hint" id="captures-hint">local storage</span>
       </div>
       <ul class="capture-list" id="capture-list"></ul>
-      <p class="empty-state" id="empty-state">No captures yet — select a mode above to start.</p>
+      <p class="empty-state" id="empty-state">No items yet — select a mode above to start.</p>
     </section>
 
     <div class="kb-hints">
@@ -115,6 +125,7 @@ const emptyState = requiredElement<HTMLParagraphElement>('empty-state');
 const startButton = requiredElement<HTMLButtonElement>('start-selection');
 const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
 const blurButton = requiredElement<HTMLButtonElement>('blur-selection');
+const textButton = requiredElement<HTMLButtonElement>('text-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
 const clearButton = requiredElement<HTMLButtonElement>('clear-session');
@@ -125,11 +136,16 @@ const suppressHoverStateToggle =
 let currentTabId: number | null = null;
 let tabIsScriptable = false;
 let currentSessionCount = 0;
-let activeMode: 'capture' | 'hide' | 'blur' | null = null;
+let activeMode: 'capture' | 'hide' | 'blur' | 'text' | null = null;
 
-const modeButtons = { capture: startButton, hide: hideButton, blur: blurButton };
+const modeButtons = {
+  capture: startButton,
+  hide: hideButton,
+  blur: blurButton,
+  text: textButton,
+};
 
-function setActiveMode(mode: 'capture' | 'hide' | 'blur' | null) {
+function setActiveMode(mode: 'capture' | 'hide' | 'blur' | 'text' | null) {
   activeMode = mode;
   for (const [key, btn] of Object.entries(modeButtons)) {
     btn.classList.toggle('mode-btn--active', key === mode);
@@ -210,6 +226,30 @@ blurButton.addEventListener('click', async () => {
   });
 });
 
+textButton.addEventListener('click', async () => {
+  const tabId = currentTabId;
+  if (tabId == null) {
+    setStatus('No active browser tab is available.', true);
+    return;
+  }
+
+  await withBusy(async () => {
+    const response = await sendMessage<{ tabId: number }>({
+      type: 'START_SELECTION',
+      tabId,
+      mode: 'text',
+    });
+
+    if (!response.ok) {
+      setStatus(response.error, true);
+      return;
+    }
+
+    setActiveMode('text');
+    setStatus('Text mode active.');
+  });
+});
+
 stopButton.addEventListener('click', async () => {
   const tabId = currentTabId;
   if (tabId == null) {
@@ -244,7 +284,7 @@ exportButton.addEventListener('click', async () => {
       return;
     }
 
-    setStatus(`Exported ${response.data.count} capture(s) to ${response.data.filename}.`);
+    setStatus(`Exported ${response.data.count} item(s) to ${response.data.filename}.`);
     await refreshSession();
   });
 });
@@ -313,7 +353,9 @@ async function initialize() {
     }
 
     if (tabIsScriptable && currentTabId != null) {
-      const modeResponse = await sendMessage<{ mode: 'capture' | 'hide' | 'blur' | null }>({
+      const modeResponse = await sendMessage<{
+        mode: 'capture' | 'hide' | 'blur' | 'text' | null;
+      }>({
         type: 'GET_ACTIVE_MODE',
         tabId: currentTabId,
       });
@@ -343,11 +385,14 @@ async function refreshSession() {
 function renderSession(session: SessionSummary) {
   currentSessionCount = session.count;
   captureCount.textContent = `${session.count}`;
-  sessionStatus.textContent = session.count > 0 ? 'active' : '—';
+  sessionStatus.textContent =
+    session.count > 0
+      ? `${session.captureCount}c / ${session.textFragmentCount}t`
+      : '—';
   syncActionAvailability();
   captureList.innerHTML = '';
 
-  if (session.captures.length === 0) {
+  if (session.items.length === 0) {
     emptyState.hidden = false;
     return;
   }
@@ -361,8 +406,12 @@ function renderSession(session: SessionSummary) {
     day: 'numeric',
   });
 
-  for (const capture of session.captures) {
-    captureList.append(renderCapture(capture, timeFormatter));
+  for (const item of session.items) {
+    captureList.append(
+      item.kind === 'capture'
+        ? renderCapture(item, timeFormatter)
+        : renderTextFragment(item, timeFormatter),
+    );
   }
 }
 
@@ -390,6 +439,30 @@ function renderCapture(
   return item;
 }
 
+function renderTextFragment(
+  fragment: TextFragmentSummary,
+  timeFormatter: Intl.DateTimeFormat,
+): HTMLLIElement {
+  const item = document.createElement('li');
+  item.className = 'capture-item';
+  item.innerHTML = `
+    <div class="capture-top">
+      <div>
+        <p class="capture-tag"><span class="capture-tag-name capture-tag-name--text">text</span></p>
+        <p class="capture-label">${escapeHtml(fragment.fragmentText)}</p>
+      </div>
+      <span class="capture-time">${timeFormatter.format(new Date(fragment.capturedAt))}</span>
+    </div>
+    <div class="capture-details">
+      <p class="capture-meta">${Math.round(fragment.width)}×${Math.round(fragment.height)}</p>
+      <p class="capture-meta">@${Math.round(fragment.viewportX)},${Math.round(fragment.viewportY)}</p>
+    </div>
+    <p class="capture-url">${escapeHtml(fragment.fontSize)} · ${escapeHtml(fragment.color)}</p>
+  `;
+
+  return item;
+}
+
 async function withBusy(work: () => Promise<void>) {
   setBusy(true);
   try {
@@ -407,6 +480,7 @@ function syncActionAvailability(busy = false) {
   startButton.disabled = busy || !tabIsScriptable;
   hideButton.disabled = busy || !tabIsScriptable;
   blurButton.disabled = busy || !tabIsScriptable;
+  textButton.disabled = busy || !tabIsScriptable;
   stopButton.disabled = busy || !tabIsScriptable || activeMode === null;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;

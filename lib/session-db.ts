@@ -1,5 +1,13 @@
-import type { CaptureRecord, SessionSummary } from '@/lib/protocol';
-import { toCaptureSummary } from '@/lib/protocol';
+import type {
+  CaptureRecord,
+  SessionRecord,
+  SessionSummary,
+  TextFragmentRecord,
+} from '@/lib/protocol';
+import {
+  isCaptureRecord,
+  toSessionItemSummary,
+} from '@/lib/protocol';
 
 const DATABASE_NAME = 'motion-element-capture';
 const DATABASE_VERSION = 1;
@@ -7,27 +15,49 @@ const STORE_NAME = 'captures';
 
 let databasePromise: Promise<IDBDatabase> | null = null;
 
+type LegacyCaptureRecord = Omit<CaptureRecord, 'kind'> & { kind?: undefined };
+
 export async function saveCapture(capture: CaptureRecord): Promise<void> {
+  await saveSessionRecord(capture);
+}
+
+export async function saveTextFragment(fragment: TextFragmentRecord): Promise<void> {
+  await saveSessionRecord(fragment);
+}
+
+async function saveSessionRecord(record: SessionRecord): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, 'readwrite');
-  transaction.objectStore(STORE_NAME).put(capture);
+  transaction.objectStore(STORE_NAME).put(record);
   await waitForTransaction(transaction);
 }
 
-export async function getCaptureRecords(): Promise<CaptureRecord[]> {
+export async function getSessionRecords(): Promise<SessionRecord[]> {
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, 'readonly');
   const request = transaction.objectStore(STORE_NAME).getAll();
-  const captures = await waitForRequest(request);
+  const records = await waitForRequest(request);
   await waitForTransaction(transaction);
-  return captures.sort((left, right) => right.capturedAt.localeCompare(left.capturedAt));
+
+  return records
+    .map(normalizeSessionRecord)
+    .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt));
+}
+
+export async function getCaptureRecords(): Promise<CaptureRecord[]> {
+  const records = await getSessionRecords();
+  return records.filter(isCaptureRecord);
 }
 
 export async function getSessionSummary(): Promise<SessionSummary> {
-  const captures = await getCaptureRecords();
+  const records = await getSessionRecords();
+  const captureCount = records.filter(isCaptureRecord).length;
+
   return {
-    count: captures.length,
-    captures: captures.map(toCaptureSummary),
+    count: records.length,
+    captureCount,
+    textFragmentCount: records.length - captureCount,
+    items: records.map(toSessionItemSummary),
   };
 }
 
@@ -38,19 +68,32 @@ export async function clearCaptures(): Promise<void> {
   await waitForTransaction(transaction);
 }
 
-export async function deleteLatestCapture(): Promise<CaptureRecord | null> {
-  const captures = await getCaptureRecords();
-  const latestCapture = captures[0];
-  if (!latestCapture) {
+export async function deleteLatestSessionRecord(): Promise<SessionRecord | null> {
+  const records = await getSessionRecords();
+  const latestRecord = records[0];
+  if (!latestRecord) {
     return null;
   }
 
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, 'readwrite');
-  transaction.objectStore(STORE_NAME).delete(latestCapture.id);
+  transaction.objectStore(STORE_NAME).delete(latestRecord.id);
   await waitForTransaction(transaction);
 
-  return latestCapture;
+  return latestRecord;
+}
+
+function normalizeSessionRecord(
+  record: SessionRecord | LegacyCaptureRecord,
+): SessionRecord {
+  if ('kind' in record && record.kind === 'text-fragment') {
+    return record;
+  }
+
+  return {
+    ...record,
+    kind: 'capture',
+  } as CaptureRecord;
 }
 
 function openDatabase(): Promise<IDBDatabase> {

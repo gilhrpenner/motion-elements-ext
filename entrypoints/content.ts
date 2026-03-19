@@ -179,6 +179,25 @@ function createSelectorController() {
 
         shouldRecomputeSelection = true;
         showToast(`Blurred ${getElementLabel(element)}.`, 'success');
+      } else if (selectionMode === 'text') {
+        const measuredFragment = await measureTextFragment(element);
+        if (!measuredFragment) {
+          return;
+        }
+
+        const response = (await browser.runtime.sendMessage({
+          type: 'SAVE_TEXT_FRAGMENT',
+          fragment: measuredFragment,
+        } satisfies ExtensionMessage)) as ExtensionResponse<{
+          fragment: { fragmentText: string };
+        }>;
+
+        if (!response?.ok) {
+          showToast(response?.error ?? 'Text fragment save failed.', 'error');
+          return;
+        }
+
+        showToast(`Saved text fragment ${response.data.fragment.fragmentText}.`, 'success');
       } else {
         const validationError = validateSelection(selection);
         if (validationError) {
@@ -484,6 +503,96 @@ function createSelectorController() {
     }
   }
 
+  async function measureTextFragment(element: Element) {
+    const segments = collectTextSegments(element);
+    if (segments.length === 0) {
+      showToast('No selectable text was found in this element.', 'error');
+      return null;
+    }
+
+    const fullText = segments.map((segment) => segment.text).join('');
+    const defaultFragment = getPreferredTextFragment(fullText);
+    const fragmentInput = window.prompt(
+      'Enter the exact text fragment to extract for animation:',
+      defaultFragment,
+    );
+
+    if (fragmentInput == null) {
+      showToast('Text fragment capture cancelled.', 'info');
+      return null;
+    }
+
+    const fragmentText = fragmentInput.trim();
+    if (!fragmentText) {
+      showToast('Enter a non-empty text fragment.', 'error');
+      return null;
+    }
+
+    const fragmentStart = fullText.indexOf(fragmentText);
+    if (fragmentStart === -1) {
+      showToast('That exact fragment was not found in the clicked element.', 'error');
+      return null;
+    }
+
+    const fragmentEnd = fragmentStart + fragmentText.length;
+    const range = createTextRangeFromIndices(segments, fragmentStart, fragmentEnd);
+    const rect = range.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      showToast('The selected text fragment has no measurable size.', 'error');
+      return null;
+    }
+
+    const styleSource = getTextStyleSource(range, element);
+    const styles = getComputedStyle(styleSource);
+    const pageMetrics = getPageMetrics();
+    const fragmentRects = Array.from(range.getClientRects()).map((clientRect) => ({
+      viewportX: clientRect.left,
+      viewportY: clientRect.top,
+      pageX: clientRect.left + window.scrollX,
+      pageY: clientRect.top + window.scrollY,
+      width: clientRect.width,
+      height: clientRect.height,
+    }));
+
+    return {
+      kind: 'text-fragment' as const,
+      pageUrl: window.location.href,
+      pageTitle: document.title,
+      tagName: element.tagName.toLowerCase(),
+      elementLabel: getElementLabel(element),
+      viewportX: rect.left,
+      viewportY: rect.top,
+      pageX: rect.left + window.scrollX,
+      pageY: rect.top + window.scrollY,
+      width: rect.width,
+      height: rect.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      documentWidth: pageMetrics.documentWidth,
+      documentHeight: pageMetrics.documentHeight,
+      bodyWidth: pageMetrics.bodyWidth,
+      bodyHeight: pageMetrics.bodyHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      devicePixelRatio: window.devicePixelRatio,
+      fullText,
+      fragmentText,
+      fragmentStart,
+      fragmentEnd,
+      fragmentRects,
+      fontFamily: styles.fontFamily,
+      fontSize: styles.fontSize,
+      fontWeight: styles.fontWeight,
+      fontStyle: styles.fontStyle,
+      lineHeight: styles.lineHeight,
+      letterSpacing: styles.letterSpacing,
+      color: styles.color,
+      textAlign: styles.textAlign,
+      textTransform: styles.textTransform,
+      textDecoration: styles.textDecoration,
+    };
+  }
+
   function ensureUi() {
     if (!overlay) {
       overlay = document.createElement('div');
@@ -564,6 +673,13 @@ function createSelectorController() {
   return { mount };
 }
 
+interface TextSegment {
+  node: Text;
+  text: string;
+  start: number;
+  end: number;
+}
+
 function buildAncestorChain(element: Element): Element[] {
   const chain: Element[] = [];
   let current: Element | null = element;
@@ -635,6 +751,81 @@ function getPageMetrics() {
   };
 }
 
+function collectTextSegments(element: Element): TextSegment[] {
+  const segments: TextSegment[] = [];
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let currentStart = 0;
+  let node = walker.nextNode();
+
+  while (node) {
+    if (node instanceof Text) {
+      const text = node.textContent ?? '';
+      if (text.trim().length > 0) {
+        segments.push({
+          node,
+          text,
+          start: currentStart,
+          end: currentStart + text.length,
+        });
+        currentStart += text.length;
+      }
+    }
+
+    node = walker.nextNode();
+  }
+
+  return segments;
+}
+
+function getPreferredTextFragment(fullText: string): string {
+  const numericMatch = fullText.match(/\d[\d.,]*/);
+  if (numericMatch?.[0]) {
+    return numericMatch[0];
+  }
+
+  return fullText.trim();
+}
+
+function createTextRangeFromIndices(
+  segments: TextSegment[],
+  start: number,
+  end: number,
+): Range {
+  const range = document.createRange();
+  const startPosition = resolveTextPosition(segments, start);
+  const endPosition = resolveTextPosition(segments, end);
+
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+
+  return range;
+}
+
+function resolveTextPosition(segments: TextSegment[], index: number) {
+  for (const segment of segments) {
+    if (index <= segment.end) {
+      return {
+        node: segment.node,
+        offset: clamp(index - segment.start, 0, segment.text.length),
+      };
+    }
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  return {
+    node: lastSegment.node,
+    offset: lastSegment.text.length,
+  };
+}
+
+function getTextStyleSource(range: Range, fallback: Element): Element {
+  if (range.startContainer instanceof Element) {
+    return range.startContainer;
+  }
+
+  return range.startContainer.parentElement ?? fallback;
+}
+
 function getElementLabel(element: Element): string {
   if (element.id) {
     return `#${element.id}`;
@@ -688,7 +879,8 @@ function isSelectorControlMessage(
       'mode' in message &&
       (message.mode === 'capture' ||
         message.mode === 'hide' ||
-        message.mode === 'blur')) ||
+        message.mode === 'blur' ||
+        message.mode === 'text')) ||
       message.type === 'STOP_SELECTION')
   );
 }
@@ -723,6 +915,10 @@ function getSelectionModeMessage(mode: SelectionMode): string {
 
   if (mode === 'blur') {
     return 'Blur mode is active. Hover, click to blur, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
+  }
+
+  if (mode === 'text') {
+    return 'Text mode is active. Hover a text element, click it, enter the exact fragment to measure, then export the saved text metadata for Remotion.';
   }
 
   return 'Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
