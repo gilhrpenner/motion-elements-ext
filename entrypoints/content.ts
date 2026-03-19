@@ -1,4 +1,8 @@
 import type { ExtensionMessage, ExtensionResponse, SelectionRect } from '@/lib/protocol';
+import {
+  getHideAfterCaptureSetting,
+  getSuppressHoverStateSetting,
+} from '@/lib/settings';
 
 declare global {
   interface Window {
@@ -8,6 +12,7 @@ declare global {
 
 type SelectorController = ReturnType<typeof createSelectorController>;
 type Tone = 'info' | 'success' | 'error';
+type HideableElement = HTMLElement | SVGElement;
 
 export default defineContentScript({
   registration: 'runtime',
@@ -29,7 +34,14 @@ function createSelectorController() {
   let overlay: HTMLDivElement | null = null;
   let overlayLabel: HTMLDivElement | null = null;
   let toast: HTMLDivElement | null = null;
+  let captureStyle: HTMLStyleElement | null = null;
   let lastPointer: { x: number; y: number } | null = null;
+  const hiddenCaptureHistory: Array<{
+    captureId: string;
+    element: HideableElement;
+    previousVisibility: string;
+    previousPriority: string;
+  }> = [];
 
   const onMessage = async (message: unknown): Promise<ExtensionResponse<{ active: boolean }> | undefined> => {
     if (!isSelectorControlMessage(message)) {
@@ -67,7 +79,7 @@ function createSelectorController() {
     active = true;
     capturing = false;
     ensureUi();
-    showToast('Selection mode is active. Hover, click to capture, use [ and ] to change depth, Esc to stop.');
+    showToast('Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.');
     if (lastPointer) {
       updateSelectionFromPoint(lastPointer.x, lastPointer.y);
       refreshOverlay();
@@ -127,27 +139,45 @@ function createSelectorController() {
       return;
     }
 
+    const suppressHoverState = await getSuppressHoverStateSetting();
     capturing = true;
     hideOverlay();
+    hideToast();
+    if (suppressHoverState) {
+      setCaptureFreeze(true);
+    }
+    let shouldRecomputeSelection = false;
 
     try {
       await waitForPaint();
       const response = (await browser.runtime.sendMessage({
         type: 'CAPTURE_ELEMENT',
         selection,
-      } satisfies ExtensionMessage)) as ExtensionResponse<{ capture: { elementLabel: string } }>;
+      } satisfies ExtensionMessage)) as ExtensionResponse<{
+        capture: { id: string; elementLabel: string };
+      }>;
 
       if (!response?.ok) {
         showToast(response?.error ?? 'Capture failed.', 'error');
         return;
       }
 
+      if (await getHideAfterCaptureSetting()) {
+        hideCapturedElement(element, response.data.capture.id);
+        shouldRecomputeSelection = true;
+      }
+
       showToast(`Captured ${response.data.capture.elementLabel}.`, 'success');
     } catch (error) {
       showToast(normalizeError(error), 'error');
     } finally {
+      setCaptureFreeze(false);
       capturing = false;
-      refreshOverlay();
+      if (shouldRecomputeSelection && lastPointer) {
+        updateSelectionFromPoint(lastPointer.x, lastPointer.y);
+      } else {
+        refreshOverlay();
+      }
     }
   }
 
@@ -167,6 +197,14 @@ function createSelectorController() {
       event.preventDefault();
       event.stopPropagation();
       selectParent();
+      return;
+    }
+
+    if (isUndoShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      void undoLastCapture();
       return;
     }
 
@@ -254,6 +292,105 @@ function createSelectorController() {
     toast.hidden = false;
     toast.textContent = message;
     toast.dataset.tone = tone;
+  }
+
+  function setCaptureFreeze(enabled: boolean) {
+    ensureCaptureStyle();
+    document.documentElement.toggleAttribute('data-motion-capture-freeze', enabled);
+  }
+
+  function ensureCaptureStyle() {
+    if (captureStyle) {
+      return;
+    }
+
+    captureStyle = document.createElement('style');
+    captureStyle.id = '__motion-element-capture-freeze-style';
+    captureStyle.textContent = `
+      html[data-motion-capture-freeze] body,
+      html[data-motion-capture-freeze] body * {
+        pointer-events: none !important;
+        transition: none !important;
+        animation: none !important;
+        caret-color: transparent !important;
+      }
+    `;
+    document.documentElement.append(captureStyle);
+  }
+
+  async function undoLastCapture() {
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: 'UNDO_LAST_CAPTURE',
+      } satisfies ExtensionMessage)) as ExtensionResponse<{
+        removedId: string;
+        removedLabel: string;
+        count: number;
+      }>;
+
+      if (!response?.ok) {
+        showToast(response?.error ?? 'Undo failed.', 'error');
+        return;
+      }
+
+      restoreHiddenCapture(response.data.removedId);
+
+      if (lastPointer) {
+        updateSelectionFromPoint(lastPointer.x, lastPointer.y);
+      } else {
+        refreshOverlay();
+      }
+
+      showToast(
+        `Removed ${response.data.removedLabel}. ${response.data.count} capture${
+          response.data.count === 1 ? '' : 's'
+        } left.`,
+        'success',
+      );
+    } catch (error) {
+      showToast(normalizeError(error), 'error');
+    }
+  }
+
+  function hideCapturedElement(element: Element, captureId: string) {
+    const hideableElement = toHideableElement(element);
+    if (!hideableElement) {
+      return;
+    }
+
+    hiddenCaptureHistory.push({
+      captureId,
+      element: hideableElement,
+      previousVisibility: hideableElement.style.getPropertyValue('visibility'),
+      previousPriority: hideableElement.style.getPropertyPriority('visibility'),
+    });
+    hideableElement.style.setProperty('visibility', 'hidden', 'important');
+  }
+
+  function restoreHiddenCapture(captureId: string) {
+    for (let index = hiddenCaptureHistory.length - 1; index >= 0; index -= 1) {
+      const entry = hiddenCaptureHistory[index];
+      if (entry.captureId !== captureId) {
+        continue;
+      }
+
+      hiddenCaptureHistory.splice(index, 1);
+      if (!entry.element.isConnected) {
+        return;
+      }
+
+      if (entry.previousVisibility) {
+        entry.element.style.setProperty(
+          'visibility',
+          entry.previousVisibility,
+          entry.previousPriority,
+        );
+      } else {
+        entry.element.style.removeProperty('visibility');
+      }
+
+      return;
+    }
   }
 
   function ensureUi() {
@@ -350,6 +487,7 @@ function buildAncestorChain(element: Element): Element[] {
 
 function createSelectionRect(element: Element): SelectionRect {
   const rect = element.getBoundingClientRect();
+  const pageMetrics = getPageMetrics();
 
   return {
     tagName: element.tagName.toLowerCase(),
@@ -364,9 +502,45 @@ function createSelectionRect(element: Element): SelectionRect {
     height: rect.height,
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight,
+    documentWidth: pageMetrics.documentWidth,
+    documentHeight: pageMetrics.documentHeight,
+    bodyWidth: pageMetrics.bodyWidth,
+    bodyHeight: pageMetrics.bodyHeight,
     scrollX: window.scrollX,
     scrollY: window.scrollY,
     devicePixelRatio: window.devicePixelRatio,
+  };
+}
+
+function getPageMetrics() {
+  const body = document.body;
+  const root = document.documentElement;
+
+  const bodyWidth = body
+    ? Math.max(body.scrollWidth, body.offsetWidth, body.clientWidth)
+    : root.clientWidth;
+  const bodyHeight = body
+    ? Math.max(body.scrollHeight, body.offsetHeight, body.clientHeight)
+    : root.clientHeight;
+
+  const documentWidth = Math.max(
+    root.scrollWidth,
+    root.offsetWidth,
+    root.clientWidth,
+    bodyWidth,
+  );
+  const documentHeight = Math.max(
+    root.scrollHeight,
+    root.offsetHeight,
+    root.clientHeight,
+    bodyHeight,
+  );
+
+  return {
+    bodyWidth,
+    bodyHeight,
+    documentWidth,
+    documentHeight,
   };
 }
 
@@ -427,6 +601,23 @@ function waitForPaint() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
+}
+
+function isUndoShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.key.toLowerCase() === 'z' &&
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+function toHideableElement(element: Element): HideableElement | null {
+  if ('style' in element) {
+    return element as HideableElement;
+  }
+
+  return null;
 }
 
 function clamp(value: number, min: number, max: number): number {

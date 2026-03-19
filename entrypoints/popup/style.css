@@ -206,6 +206,41 @@ kbd {
   font-size: 0.86rem;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(16, 35, 26, 0.08);
+  border-radius: 16px;
+  background: rgba(245, 249, 246, 0.84);
+}
+
+.toggle-row strong,
+.toggle-row small {
+  display: block;
+}
+
+.toggle-row strong {
+  color: #173c2b;
+  font-size: 0.88rem;
+}
+
+.toggle-row small {
+  margin-top: 3px;
+  color: #688277;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #276749;
+}
+
 .status-message[data-tone='error'] {
   color: #991b1b;
 }

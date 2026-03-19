@@ -1,6 +1,12 @@
 import './style.css';
 
 import type { CaptureSummary, ExtensionMessage, ExtensionResponse, SessionSummary } from '@/lib/protocol';
+import {
+  getHideAfterCaptureSetting,
+  getSuppressHoverStateSetting,
+  setHideAfterCaptureSetting,
+  setSuppressHoverStateSetting,
+} from '@/lib/settings';
 import { getUnsupportedTabMessage, isScriptableUrl } from '@/lib/tab';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -15,7 +21,7 @@ app.innerHTML = `
       <p class="eyebrow">Motion Element Capture</p>
       <h1>Capture the exact UI fragments you want to animate.</h1>
       <p class="subhead">
-        Start selection mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, then click to save the PNG and coordinates.
+        Start selection mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to save the PNG and coordinates, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last capture.
       </p>
       <div class="hero-row">
         <div>
@@ -35,6 +41,20 @@ app.innerHTML = `
         <button class="secondary" id="export-session" type="button">Export ZIP</button>
         <button class="ghost" id="clear-session" type="button">Clear Session</button>
       </div>
+      <label class="toggle-row" for="hide-after-capture">
+        <span>
+          <strong>Hide after capture</strong>
+          <small>Keep the layout space but hide the captured element on the page.</small>
+        </span>
+        <input id="hide-after-capture" type="checkbox" />
+      </label>
+      <label class="toggle-row" for="suppress-hover-state">
+        <span>
+          <strong>Suppress hover state</strong>
+          <small>Temporarily remove hover-driven effects before the screenshot is taken.</small>
+        </span>
+        <input id="suppress-hover-state" type="checkbox" />
+      </label>
       <p class="status-message" id="status-message">Ready.</p>
     </section>
 
@@ -58,6 +78,9 @@ const startButton = requiredElement<HTMLButtonElement>('start-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
 const clearButton = requiredElement<HTMLButtonElement>('clear-session');
+const hideAfterCaptureToggle = requiredElement<HTMLInputElement>('hide-after-capture');
+const suppressHoverStateToggle =
+  requiredElement<HTMLInputElement>('suppress-hover-state');
 
 let currentTabId: number | null = null;
 let tabIsScriptable = false;
@@ -139,6 +162,34 @@ clearButton.addEventListener('click', async () => {
   });
 });
 
+hideAfterCaptureToggle.addEventListener('change', async () => {
+  try {
+    await setHideAfterCaptureSetting(hideAfterCaptureToggle.checked);
+    setStatus(
+      hideAfterCaptureToggle.checked
+        ? 'Hide after capture is enabled.'
+        : 'Hide after capture is disabled.',
+    );
+  } catch (error) {
+    hideAfterCaptureToggle.checked = !hideAfterCaptureToggle.checked;
+    setStatus(normalizeError(error), true);
+  }
+});
+
+suppressHoverStateToggle.addEventListener('change', async () => {
+  try {
+    await setSuppressHoverStateSetting(suppressHoverStateToggle.checked);
+    setStatus(
+      suppressHoverStateToggle.checked
+        ? 'Hover suppression is enabled.'
+        : 'Hover suppression is disabled.',
+    );
+  } catch (error) {
+    suppressHoverStateToggle.checked = !suppressHoverStateToggle.checked;
+    setStatus(normalizeError(error), true);
+  }
+});
+
 void initialize();
 
 async function initialize() {
@@ -146,6 +197,8 @@ async function initialize() {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     currentTabId = tab?.id ?? null;
     tabIsScriptable = isScriptableUrl(tab?.url);
+    hideAfterCaptureToggle.checked = await getHideAfterCaptureSetting();
+    suppressHoverStateToggle.checked = await getSuppressHoverStateSetting();
 
     tabStatus.textContent = tabIsScriptable ? 'Scriptable tab' : 'Unsupported tab';
     tabStatus.dataset.tone = tabIsScriptable ? 'ready' : 'error';

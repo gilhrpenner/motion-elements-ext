@@ -1,6 +1,7 @@
 import { defineConfig } from 'wxt';
 
 export default defineConfig({
+  outDir: 'dist',
   manifest: {
     name: 'Motion Element Capture',
     short_name: 'Element Capture',

@@ -15,6 +15,7 @@ import {
 } from '@/lib/protocol';
 import {
   clearCaptures,
+  deleteLatestCapture,
   getCaptureRecords,
   getSessionSummary,
   saveCapture,
@@ -25,12 +26,22 @@ type MessageSender = Browser.runtime.MessageSender;
 type SelectorControlMessage = { type: 'START_SELECTION' | 'STOP_SELECTION' };
 
 export default defineBackground(() => {
-  browser.runtime.onMessage.addListener((message, sender) => {
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isExtensionMessage(message)) {
-      return undefined;
+      return false;
     }
 
-    return handleMessage(message, sender);
+    void handleMessage(message, sender)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error('Background message handler failed.', {
+          type: message.type,
+          error,
+        });
+        sendResponse(fail(normalizeError(error)));
+      });
+
+    return true;
   });
 });
 
@@ -47,6 +58,8 @@ async function handleMessage(
       return captureElement(message.selection, sender);
     case 'GET_SESSION':
       return ok(await getSessionSummary());
+    case 'UNDO_LAST_CAPTURE':
+      return undoLastCapture();
     case 'CLEAR_SESSION':
       await clearCaptures();
       return ok(await getSessionSummary());
@@ -55,6 +68,22 @@ async function handleMessage(
     default:
       return fail('Unknown message type.');
   }
+}
+
+async function undoLastCapture(): Promise<
+  ExtensionResponse<{ removedId: string; removedLabel: string; count: number }>
+> {
+  const removedCapture = await deleteLatestCapture();
+  if (!removedCapture) {
+    return fail('There are no captures to undo.');
+  }
+
+  const session = await getSessionSummary();
+  return ok({
+    removedId: removedCapture.id,
+    removedLabel: removedCapture.elementLabel,
+    count: session.count,
+  });
 }
 
 async function startSelection(tabId: number): Promise<ExtensionResponse<{ tabId: number }>> {
@@ -136,6 +165,12 @@ async function captureElement(
       pageY: selection.pageY,
       width: selection.width,
       height: selection.height,
+      viewportWidth: selection.viewportWidth,
+      viewportHeight: selection.viewportHeight,
+      documentWidth: selection.documentWidth,
+      documentHeight: selection.documentHeight,
+      bodyWidth: selection.bodyWidth,
+      bodyHeight: selection.bodyHeight,
       scrollX: selection.scrollX,
       scrollY: selection.scrollY,
       devicePixelRatio: selection.devicePixelRatio,
@@ -159,36 +194,46 @@ async function exportSession(): Promise<
 
   try {
     const zip = new JSZip();
-    const manifest = captures.map(({ imageBlob, ...capture }) => ({
-      ...capture,
-      imageFile: `${EXPORT_FOLDER_NAME}/${capture.id}.png`,
-    }));
+    const exportFiles = await Promise.all(
+      captures.map(async (capture, index) => {
+        const imageFile = `${EXPORT_FOLDER_NAME}/${buildExportImageFilename(
+          capture,
+          index,
+        )}`;
+
+        return {
+          capture,
+          imageFile,
+          imageBytes: await convertBlobToJpegBytes(capture.imageBlob),
+        };
+      }),
+    );
+    const manifest = exportFiles.map(({ capture, imageFile }) => {
+      const { imageBlob, ...captureMetadata } = capture;
+
+      return {
+        ...captureMetadata,
+        imageFile,
+      };
+    });
 
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-    for (const capture of captures) {
-      zip.file(
-        `${EXPORT_FOLDER_NAME}/${capture.id}.png`,
-        await capture.imageBlob.arrayBuffer(),
-      );
+    for (const file of exportFiles) {
+      zip.file(file.imageFile, file.imageBytes);
     }
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
     const filename = `motion-element-captures/session-${formatTimestampForFile(
       new Date(),
     )}.zip`;
-    const url = URL.createObjectURL(zipBlob);
+    const downloadUrl = await createDownloadUrl(zipBlob);
+    const downloadId = await browser.downloads.download({
+      url: downloadUrl,
+      filename,
+      saveAs: true,
+    });
 
-    try {
-      const downloadId = await browser.downloads.download({
-        url,
-        filename,
-        saveAs: true,
-      });
-
-      return ok({ count: captures.length, filename, downloadId });
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    }
+    return ok({ count: captures.length, filename, downloadId });
   } catch (error) {
     return fail(normalizeError(error));
   }
@@ -240,6 +285,62 @@ async function cropCapturedImage(
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const response = await fetch(dataUrl);
   return response.blob();
+}
+
+async function convertBlobToJpegBytes(blob: Blob): Promise<ArrayBuffer> {
+  const bitmap = await createImageBitmap(blob);
+
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('2D canvas is unavailable in the extension background.');
+    }
+
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, bitmap.width, bitmap.height);
+    context.drawImage(bitmap, 0, 0);
+
+    const jpegBlob = await canvas.convertToBlob({
+      type: 'image/jpeg',
+      quality: 0.92,
+    });
+
+    return jpegBlob.arrayBuffer();
+  } finally {
+    bitmap.close();
+  }
+}
+
+function buildExportImageFilename(capture: CaptureRecord, index: number): string {
+  const count = String(index + 1).padStart(3, '0');
+  const x = Math.round(capture.pageX);
+  const y = Math.round(capture.pageY);
+  const pageWidth = Math.round(capture.documentWidth);
+  const pageHeight = Math.round(capture.documentHeight);
+
+  return `${count}_${x}-${y}_${pageWidth}_${pageHeight}.jpg`;
+}
+
+async function createDownloadUrl(blob: Blob): Promise<string> {
+  if (typeof URL.createObjectURL === 'function') {
+    return URL.createObjectURL(blob);
+  }
+
+  return blobToDataUrl(blob);
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return `data:${blob.type};base64,${btoa(binary)}`;
 }
 
 function validateSelection(selection: SelectionRect): string | null {

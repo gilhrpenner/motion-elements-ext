@@ -14,6 +14,10 @@ export interface SelectionRect {
   height: number;
   viewportWidth: number;
   viewportHeight: number;
+  documentWidth: number;
+  documentHeight: number;
+  bodyWidth: number;
+  bodyHeight: number;
   scrollX: number;
   scrollY: number;
   devicePixelRatio: number;
@@ -32,6 +36,12 @@ export interface CaptureRecord {
   pageY: number;
   width: number;
   height: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  documentWidth: number;
+  documentHeight: number;
+  bodyWidth: number;
+  bodyHeight: number;
   scrollX: number;
   scrollY: number;
   devicePixelRatio: number;
@@ -50,6 +60,7 @@ export type ExtensionMessage =
   | { type: 'STOP_SELECTION'; tabId: number }
   | { type: 'CAPTURE_ELEMENT'; selection: SelectionRect }
   | { type: 'GET_SESSION' }
+  | { type: 'UNDO_LAST_CAPTURE' }
   | { type: 'CLEAR_SESSION' }
   | { type: 'EXPORT_SESSION' };
 

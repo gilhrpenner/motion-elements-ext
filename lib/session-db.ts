@@ -38,6 +38,21 @@ export async function clearCaptures(): Promise<void> {
   await waitForTransaction(transaction);
 }
 
+export async function deleteLatestCapture(): Promise<CaptureRecord | null> {
+  const captures = await getCaptureRecords();
+  const latestCapture = captures[0];
+  if (!latestCapture) {
+    return null;
+  }
+
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, 'readwrite');
+  transaction.objectStore(STORE_NAME).delete(latestCapture.id);
+  await waitForTransaction(transaction);
+
+  return latestCapture;
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   if (!databasePromise) {
     databasePromise = new Promise((resolve, reject) => {
