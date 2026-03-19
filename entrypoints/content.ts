@@ -58,7 +58,9 @@ function createSelectorController() {
     previousFilterPriority: string;
   }> = [];
 
-  const onMessage = async (message: unknown): Promise<ExtensionResponse<{ active: boolean }> | undefined> => {
+  const onMessage = async (
+    message: unknown,
+  ): Promise<ExtensionResponse<{ active: boolean; mode?: SelectionMode }> | undefined> => {
     if (!isSelectorControlMessage(message)) {
       return undefined;
     }
@@ -70,6 +72,8 @@ function createSelectorController() {
       case 'STOP_SELECTION':
         deactivate();
         return { ok: true, data: { active: false } };
+      case 'GET_SELECTION_STATE':
+        return { ok: true, data: { active, mode: selectionMode } };
       default:
         return undefined;
     }
@@ -1130,7 +1134,10 @@ function validateSelection(selection: SelectionRect): string | null {
 
 function isSelectorControlMessage(
   message: unknown,
-): message is { type: 'START_SELECTION'; mode: SelectionMode } | { type: 'STOP_SELECTION' } {
+): message is
+  | { type: 'START_SELECTION'; mode: SelectionMode }
+  | { type: 'STOP_SELECTION' }
+  | { type: 'GET_SELECTION_STATE' } {
   return (
     typeof message === 'object' &&
     message !== null &&
@@ -1141,6 +1148,7 @@ function isSelectorControlMessage(
         message.mode === 'hide' ||
         message.mode === 'blur' ||
         message.mode === 'text')) ||
+      message.type === 'GET_SELECTION_STATE' ||
       message.type === 'STOP_SELECTION')
   );
 }

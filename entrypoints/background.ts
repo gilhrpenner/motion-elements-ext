@@ -32,7 +32,8 @@ import { getUnsupportedTabMessage, isScriptableUrl } from '@/lib/tab';
 type MessageSender = Browser.runtime.MessageSender;
 type SelectorControlMessage =
   | { type: 'START_SELECTION'; mode: SelectionMode }
-  | { type: 'STOP_SELECTION' };
+  | { type: 'STOP_SELECTION' }
+  | { type: 'GET_SELECTION_STATE' };
 const activeModeByTab = new Map<number, SelectionMode>();
 
 export default defineBackground(() => {
@@ -71,7 +72,7 @@ async function handleMessage(
     case 'GET_SESSION':
       return ok(await getSessionSummary());
     case 'GET_ACTIVE_MODE':
-      return ok({ mode: activeModeByTab.get(message.tabId) ?? null });
+      return getActiveMode(message.tabId);
     case 'UNDO_LAST_CAPTURE':
       return undoLastSessionRecord();
     case 'CLEAR_SESSION':
@@ -135,6 +136,35 @@ async function startSelection(
 
   activeModeByTab.set(tabId, mode);
   return ok({ tabId });
+}
+
+async function getActiveMode(
+  tabId: number,
+): Promise<ExtensionResponse<{ mode: SelectionMode | null }>> {
+  try {
+    const response = await sendToSelector(tabId, { type: 'GET_SELECTION_STATE' });
+    if (
+      response &&
+      typeof response === 'object' &&
+      'ok' in response &&
+      response.ok &&
+      'data' in response &&
+      response.data &&
+      typeof response.data === 'object' &&
+      'active' in response.data &&
+      'mode' in response.data
+    ) {
+      return ok({
+        mode: response.data.active ? (response.data.mode as SelectionMode) : null,
+      });
+    }
+  } catch (error) {
+    if (!isMissingReceiverError(error)) {
+      return fail(normalizeError(error));
+    }
+  }
+
+  return ok({ mode: activeModeByTab.get(tabId) ?? null });
 }
 
 async function stopSelection(tabId: number): Promise<ExtensionResponse<{ tabId: number }>> {
