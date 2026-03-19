@@ -33,6 +33,20 @@ export interface SelectionRect {
   devicePixelRatio: number;
 }
 
+export interface ViewportCaptureDraft {
+  pageUrl: string;
+  pageTitle: string;
+  viewportWidth: number;
+  viewportHeight: number;
+  documentWidth: number;
+  documentHeight: number;
+  bodyWidth: number;
+  bodyHeight: number;
+  scrollX: number;
+  scrollY: number;
+  devicePixelRatio: number;
+}
+
 export interface BaseSessionRecord {
   id: string;
   capturedAt: string;
@@ -100,6 +114,7 @@ export type ExtensionMessage =
   | { type: 'START_SELECTION'; tabId: number; mode: SelectionMode }
   | { type: 'STOP_SELECTION'; tabId: number }
   | { type: 'CAPTURE_ELEMENT'; selection: SelectionRect }
+  | { type: 'CAPTURE_VIEWPORT'; tabId: number }
   | { type: 'SAVE_TEXT_FRAGMENT'; fragment: TextFragmentDraft }
   | { type: 'GET_SESSION' }
   | { type: 'GET_ACTIVE_MODE'; tabId: number }

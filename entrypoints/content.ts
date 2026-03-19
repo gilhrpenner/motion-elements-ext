@@ -3,6 +3,7 @@ import type {
   ExtensionResponse,
   SelectionMode,
   SelectionRect,
+  ViewportCaptureDraft,
 } from '@/lib/protocol';
 import {
   getHideAfterCaptureSetting,
@@ -47,6 +48,7 @@ function createSelectorController() {
   let captureStyle: HTMLStyleElement | null = null;
   let modalStyle: HTMLStyleElement | null = null;
   let lastPointer: { x: number; y: number } | null = null;
+  let screenshotSuspended = false;
   const hiddenActionHistory: Array<{
     actionId: string;
     source: 'capture' | 'hide' | 'blur';
@@ -58,25 +60,30 @@ function createSelectorController() {
     previousFilterPriority: string;
   }> = [];
 
-  const onMessage = async (
+  const onMessage = (
     message: unknown,
-  ): Promise<ExtensionResponse<{ active: boolean; mode?: SelectionMode }> | undefined> => {
+    _sender: unknown,
+    sendResponse: (
+      response?:
+        | ExtensionResponse<{ active: boolean; mode?: SelectionMode }>
+        | ExtensionResponse<ViewportCaptureDraft>,
+    ) => void,
+  ) => {
     if (!isSelectorControlMessage(message)) {
-      return undefined;
+      return false;
     }
 
-    switch (message.type) {
-      case 'START_SELECTION':
-        activate(message.mode);
-        return { ok: true, data: { active: true } };
-      case 'STOP_SELECTION':
-        deactivate();
-        return { ok: true, data: { active: false } };
-      case 'GET_SELECTION_STATE':
-        return { ok: true, data: { active, mode: selectionMode } };
-      default:
-        return undefined;
-    }
+    void handleControlMessage(message)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error('Content script message handler failed.', {
+          type: message.type,
+          error,
+        });
+        sendResponse({ ok: false, error: normalizeError(error) });
+      });
+
+    return true;
   };
 
   function mount() {
@@ -92,6 +99,34 @@ function createSelectorController() {
     window.addEventListener('resize', refreshOverlay, true);
     browser.runtime.onMessage.addListener(onMessage);
     mounted = true;
+  }
+
+  async function handleControlMessage(
+    message:
+      | { type: 'START_SELECTION'; mode: SelectionMode }
+      | { type: 'STOP_SELECTION' }
+      | { type: 'GET_SELECTION_STATE' }
+      | { type: 'PREPARE_SCREENSHOT' }
+      | { type: 'RESTORE_SCREENSHOT' },
+  ): Promise<
+    | ExtensionResponse<{ active: boolean; mode?: SelectionMode }>
+    | ExtensionResponse<ViewportCaptureDraft>
+  > {
+    switch (message.type) {
+      case 'START_SELECTION':
+        activate(message.mode);
+        return { ok: true, data: { active: true } };
+      case 'STOP_SELECTION':
+        deactivate();
+        return { ok: true, data: { active: false } };
+      case 'GET_SELECTION_STATE':
+        return { ok: true, data: { active, mode: selectionMode } };
+      case 'PREPARE_SCREENSHOT':
+        return prepareForScreenshot();
+      case 'RESTORE_SCREENSHOT':
+        restoreAfterScreenshot();
+        return { ok: true, data: { active, mode: selectionMode } };
+    }
   }
 
   function activate(mode: SelectionMode) {
@@ -309,7 +344,7 @@ function createSelectorController() {
   }
 
   function refreshOverlay() {
-    if (!active || capturing) {
+    if (!active || capturing || screenshotSuspended) {
       hideOverlay();
       return;
     }
@@ -372,6 +407,36 @@ function createSelectorController() {
   function setCaptureFreeze(enabled: boolean) {
     ensureCaptureStyle();
     document.documentElement.toggleAttribute('data-motion-capture-freeze', enabled);
+  }
+
+  async function prepareForScreenshot(): Promise<ExtensionResponse<ViewportCaptureDraft>> {
+    screenshotSuspended = true;
+    hideOverlay();
+    hideToast();
+    await waitForPaint();
+
+    const pageMetrics = getPageMetrics();
+    return {
+      ok: true,
+      data: {
+        pageUrl: window.location.href,
+        pageTitle: document.title,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        documentWidth: pageMetrics.documentWidth,
+        documentHeight: pageMetrics.documentHeight,
+        bodyWidth: pageMetrics.bodyWidth,
+        bodyHeight: pageMetrics.bodyHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        devicePixelRatio: window.devicePixelRatio,
+      },
+    };
+  }
+
+  function restoreAfterScreenshot() {
+    screenshotSuspended = false;
+    refreshOverlay();
   }
 
   function ensureCaptureStyle() {
@@ -1137,7 +1202,9 @@ function isSelectorControlMessage(
 ): message is
   | { type: 'START_SELECTION'; mode: SelectionMode }
   | { type: 'STOP_SELECTION' }
-  | { type: 'GET_SELECTION_STATE' } {
+  | { type: 'GET_SELECTION_STATE' }
+  | { type: 'PREPARE_SCREENSHOT' }
+  | { type: 'RESTORE_SCREENSHOT' } {
   return (
     typeof message === 'object' &&
     message !== null &&
@@ -1148,6 +1215,8 @@ function isSelectorControlMessage(
         message.mode === 'hide' ||
         message.mode === 'blur' ||
         message.mode === 'text')) ||
+      message.type === 'PREPARE_SCREENSHOT' ||
+      message.type === 'RESTORE_SCREENSHOT' ||
       message.type === 'GET_SELECTION_STATE' ||
       message.type === 'STOP_SELECTION')
   );

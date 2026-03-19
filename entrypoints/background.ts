@@ -13,6 +13,7 @@ import {
   type SelectionRect,
   type TextFragmentDraft,
   type TextFragmentRecord,
+  type ViewportCaptureDraft,
   fail,
   isExtensionMessage,
   ok,
@@ -33,7 +34,9 @@ type MessageSender = Browser.runtime.MessageSender;
 type SelectorControlMessage =
   | { type: 'START_SELECTION'; mode: SelectionMode }
   | { type: 'STOP_SELECTION' }
-  | { type: 'GET_SELECTION_STATE' };
+  | { type: 'GET_SELECTION_STATE' }
+  | { type: 'PREPARE_SCREENSHOT' }
+  | { type: 'RESTORE_SCREENSHOT' };
 const activeModeByTab = new Map<number, SelectionMode>();
 
 export default defineBackground(() => {
@@ -67,6 +70,8 @@ async function handleMessage(
       return stopSelection(message.tabId);
     case 'CAPTURE_ELEMENT':
       return captureElement(message.selection, sender);
+    case 'CAPTURE_VIEWPORT':
+      return captureViewport(message.tabId);
     case 'SAVE_TEXT_FRAGMENT':
       return saveMeasuredTextFragment(message.fragment);
     case 'GET_SESSION':
@@ -237,6 +242,93 @@ async function captureElement(
     return ok({ capture: toSessionItemSummary(capture) });
   } catch (error) {
     return fail(normalizeError(error));
+  }
+}
+
+async function captureViewport(
+  tabId: number,
+): Promise<ExtensionResponse<{ capture: ReturnType<typeof toSessionItemSummary> }>> {
+  const tab = await browser.tabs.get(tabId);
+  if (!isScriptableUrl(tab.url) || tab.windowId == null) {
+    return fail(getUnsupportedTabMessage(tab.url));
+  }
+
+  let draft: ViewportCaptureDraft | null = null;
+
+  try {
+    let prepareResponse: unknown;
+
+    try {
+      prepareResponse = await sendToSelector(tabId, { type: 'PREPARE_SCREENSHOT' });
+    } catch (error) {
+      if (!isMissingReceiverError(error)) {
+        return fail(normalizeError(error));
+      }
+
+      try {
+        await browser.scripting.executeScript({
+          target: { tabId },
+          files: [SELECTOR_SCRIPT_PATH],
+        });
+        prepareResponse = await sendToSelector(tabId, { type: 'PREPARE_SCREENSHOT' });
+      } catch (injectionError) {
+        return fail(normalizeInjectionError(injectionError, tab.url));
+      }
+    }
+
+    if (
+      !prepareResponse ||
+      typeof prepareResponse !== 'object' ||
+      !('ok' in prepareResponse) ||
+      !prepareResponse.ok ||
+      !('data' in prepareResponse) ||
+      !prepareResponse.data
+    ) {
+      return fail('Could not prepare the page for a viewport capture.');
+    }
+
+    draft = prepareResponse.data as ViewportCaptureDraft;
+    const screenshotDataUrl = await browser.tabs.captureVisibleTab(tab.windowId, {
+      format: 'png',
+    });
+    const imageBlob = await dataUrlToBlob(screenshotDataUrl);
+
+    const capture: CaptureRecord = {
+      id: crypto.randomUUID(),
+      capturedAt: new Date().toISOString(),
+      kind: 'capture',
+      pageUrl: draft.pageUrl,
+      pageTitle: draft.pageTitle,
+      tagName: 'viewport',
+      elementLabel: 'visible viewport',
+      viewportX: 0,
+      viewportY: 0,
+      pageX: draft.scrollX,
+      pageY: draft.scrollY,
+      width: draft.viewportWidth,
+      height: draft.viewportHeight,
+      viewportWidth: draft.viewportWidth,
+      viewportHeight: draft.viewportHeight,
+      documentWidth: draft.documentWidth,
+      documentHeight: draft.documentHeight,
+      bodyWidth: draft.bodyWidth,
+      bodyHeight: draft.bodyHeight,
+      scrollX: draft.scrollX,
+      scrollY: draft.scrollY,
+      devicePixelRatio: draft.devicePixelRatio,
+      imageBlob,
+    };
+
+    await saveCapture(capture);
+    return ok({ capture: toSessionItemSummary(capture) });
+  } catch (error) {
+    return fail(normalizeError(error));
+  } finally {
+    try {
+      await sendToSelector(tabId, { type: 'RESTORE_SCREENSHOT' });
+    } catch {
+      // Ignore restore errors. The content script may no longer be present.
+    }
   }
 }
 

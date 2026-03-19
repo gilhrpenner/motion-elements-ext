@@ -343,6 +343,18 @@ kbd {
   transform: translateY(-1px);
 }
 
+.action-btn--viewport {
+  background: rgba(126, 231, 135, 0.08);
+  border: 1px solid rgba(126, 231, 135, 0.2);
+  color: var(--text-fragment-accent);
+}
+
+.action-btn--viewport:not(:disabled):hover {
+  background: rgba(126, 231, 135, 0.16);
+  border-color: rgba(126, 231, 135, 0.35);
+  transform: translateY(-1px);
+}
+
 .action-btn--clear {
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);

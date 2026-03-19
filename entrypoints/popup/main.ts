@@ -67,6 +67,7 @@ app.innerHTML = `
 
     <div class="action-bar">
       <button class="action-btn action-btn--stop" id="stop-selection" type="button">Stop</button>
+      <button class="action-btn action-btn--viewport" id="capture-viewport" type="button">Viewport</button>
       <button class="action-btn action-btn--export" id="export-session" type="button">Export</button>
       <button class="action-btn action-btn--clear" id="clear-session" type="button">Clear</button>
     </div>
@@ -127,6 +128,7 @@ const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
 const blurButton = requiredElement<HTMLButtonElement>('blur-selection');
 const textButton = requiredElement<HTMLButtonElement>('text-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
+const viewportButton = requiredElement<HTMLButtonElement>('capture-viewport');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
 const clearButton = requiredElement<HTMLButtonElement>('clear-session');
 const hideAfterCaptureToggle = requiredElement<HTMLInputElement>('hide-after-capture');
@@ -270,6 +272,29 @@ stopButton.addEventListener('click', async () => {
 
     setActiveMode(null);
     setStatus('Stopped.');
+  });
+});
+
+viewportButton.addEventListener('click', async () => {
+  const tabId = currentTabId;
+  if (tabId == null) {
+    setStatus('No active browser tab is available.', true);
+    return;
+  }
+
+  await withBusy(async () => {
+    const response = await sendMessage<{ capture: { elementLabel: string } }>({
+      type: 'CAPTURE_VIEWPORT',
+      tabId,
+    });
+
+    if (!response.ok) {
+      setStatus(response.error, true);
+      return;
+    }
+
+    setStatus('Captured visible viewport.');
+    await refreshSession();
   });
 });
 
@@ -482,6 +507,7 @@ function syncActionAvailability(busy = false) {
   blurButton.disabled = busy || !tabIsScriptable;
   textButton.disabled = busy || !tabIsScriptable;
   stopButton.disabled = busy || !tabIsScriptable || activeMode === null;
+  viewportButton.disabled = busy || !tabIsScriptable;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;
 }
