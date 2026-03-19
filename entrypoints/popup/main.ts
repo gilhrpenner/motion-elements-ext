@@ -21,7 +21,7 @@ app.innerHTML = `
       <p class="eyebrow">Motion Element Capture</p>
       <h1>Capture the exact UI fragments you want to animate.</h1>
       <p class="subhead">
-        Start capture mode or hide mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to act, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last hide or capture.
+        Start capture, hide, or blur mode, hover any visible element, press <kbd>[</kbd> or <kbd>]</kbd> to change depth, click to act, or use <kbd>⌘/Ctrl</kbd> + <kbd>Z</kbd> to undo the last local change or capture.
       </p>
       <div class="hero-row">
         <div>
@@ -38,10 +38,11 @@ app.innerHTML = `
         <button class="secondary" id="hide-selection" type="button">Hide Element</button>
       </div>
       <div class="actions">
+        <button class="secondary" id="blur-selection" type="button">Blur Element</button>
         <button class="secondary" id="stop-selection" type="button">Stop</button>
-        <button class="secondary" id="export-session" type="button">Export ZIP</button>
       </div>
       <div class="actions">
+        <button class="secondary" id="export-session" type="button">Export ZIP</button>
         <button class="ghost" id="clear-session" type="button">Clear Session</button>
       </div>
       <label class="toggle-row" for="hide-after-capture">
@@ -79,6 +80,7 @@ const captureList = requiredElement<HTMLUListElement>('capture-list');
 const emptyState = requiredElement<HTMLParagraphElement>('empty-state');
 const startButton = requiredElement<HTMLButtonElement>('start-selection');
 const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
+const blurButton = requiredElement<HTMLButtonElement>('blur-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
 const clearButton = requiredElement<HTMLButtonElement>('clear-session');
@@ -133,6 +135,29 @@ hideButton.addEventListener('click', async () => {
     }
 
     setStatus('Hide mode started on the current page.');
+  });
+});
+
+blurButton.addEventListener('click', async () => {
+  const tabId = currentTabId;
+  if (tabId == null) {
+    setStatus('No active browser tab is available.', true);
+    return;
+  }
+
+  await withBusy(async () => {
+    const response = await sendMessage<{ tabId: number }>({
+      type: 'START_SELECTION',
+      tabId,
+      mode: 'blur',
+    });
+
+    if (!response.ok) {
+      setStatus(response.error, true);
+      return;
+    }
+
+    setStatus('Blur mode started on the current page.');
   });
 });
 
@@ -318,6 +343,7 @@ function setBusy(busy: boolean) {
 function syncActionAvailability(busy = false) {
   startButton.disabled = busy || !tabIsScriptable;
   hideButton.disabled = busy || !tabIsScriptable;
+  blurButton.disabled = busy || !tabIsScriptable;
   stopButton.disabled = busy || !tabIsScriptable;
   exportButton.disabled = busy || currentSessionCount === 0;
   clearButton.disabled = busy || currentSessionCount === 0;

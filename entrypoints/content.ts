@@ -18,6 +18,7 @@ declare global {
 type SelectorController = ReturnType<typeof createSelectorController>;
 type Tone = 'info' | 'success' | 'error';
 type HideableElement = HTMLElement | SVGElement;
+const BLUR_FILTER_VALUE = 'blur(8px)';
 
 export default defineContentScript({
   registration: 'runtime',
@@ -44,11 +45,13 @@ function createSelectorController() {
   let lastPointer: { x: number; y: number } | null = null;
   const hiddenActionHistory: Array<{
     actionId: string;
-    source: 'capture' | 'hide';
+    source: 'capture' | 'hide' | 'blur';
     label: string;
     element: HideableElement;
     previousVisibility: string;
     previousPriority: string;
+    previousFilter: string;
+    previousFilterPriority: string;
   }> = [];
 
   const onMessage = async (message: unknown): Promise<ExtensionResponse<{ active: boolean }> | undefined> => {
@@ -149,7 +152,7 @@ function createSelectorController() {
 
     try {
       if (selectionMode === 'hide') {
-        const hidden = hideElementPreservingSpace(
+        const hidden = applyLocalStyleAction(
           element,
           crypto.randomUUID(),
           'hide',
@@ -162,6 +165,20 @@ function createSelectorController() {
 
         shouldRecomputeSelection = true;
         showToast(`Hidden ${getElementLabel(element)}.`, 'success');
+      } else if (selectionMode === 'blur') {
+        const blurred = applyLocalStyleAction(
+          element,
+          crypto.randomUUID(),
+          'blur',
+          getElementLabel(element),
+        );
+        if (!blurred) {
+          showToast('This element cannot be blurred safely.', 'error');
+          return;
+        }
+
+        shouldRecomputeSelection = true;
+        showToast(`Blurred ${getElementLabel(element)}.`, 'success');
       } else {
         const validationError = validateSelection(selection);
         if (validationError) {
@@ -188,7 +205,7 @@ function createSelectorController() {
         }
 
         if (await getHideAfterCaptureSetting()) {
-          hideElementPreservingSpace(
+          applyLocalStyleAction(
             element,
             response.data.capture.id,
             'capture',
@@ -351,7 +368,10 @@ function createSelectorController() {
 
   async function undoLastCapture() {
     const latestHiddenAction = hiddenActionHistory[hiddenActionHistory.length - 1];
-    if (latestHiddenAction?.source === 'hide') {
+    if (
+      latestHiddenAction?.source === 'hide' ||
+      latestHiddenAction?.source === 'blur'
+    ) {
       restoreHiddenAction(latestHiddenAction.actionId);
 
       if (lastPointer) {
@@ -397,10 +417,10 @@ function createSelectorController() {
     }
   }
 
-  function hideElementPreservingSpace(
+  function applyLocalStyleAction(
     element: Element,
     actionId: string,
-    source: 'capture' | 'hide',
+    source: 'capture' | 'hide' | 'blur',
     label: string,
   ) {
     const hideableElement = toHideableElement(element);
@@ -415,8 +435,16 @@ function createSelectorController() {
       element: hideableElement,
       previousVisibility: hideableElement.style.getPropertyValue('visibility'),
       previousPriority: hideableElement.style.getPropertyPriority('visibility'),
+      previousFilter: hideableElement.style.getPropertyValue('filter'),
+      previousFilterPriority: hideableElement.style.getPropertyPriority('filter'),
     });
-    hideableElement.style.setProperty('visibility', 'hidden', 'important');
+
+    if (source === 'blur') {
+      hideableElement.style.setProperty('filter', BLUR_FILTER_VALUE, 'important');
+    } else {
+      hideableElement.style.setProperty('visibility', 'hidden', 'important');
+    }
+
     return true;
   }
 
@@ -440,6 +468,16 @@ function createSelectorController() {
         );
       } else {
         entry.element.style.removeProperty('visibility');
+      }
+
+      if (entry.previousFilter) {
+        entry.element.style.setProperty(
+          'filter',
+          entry.previousFilter,
+          entry.previousFilterPriority,
+        );
+      } else {
+        entry.element.style.removeProperty('filter');
       }
 
       return;
@@ -648,7 +686,9 @@ function isSelectorControlMessage(
     'type' in message &&
     ((message.type === 'START_SELECTION' &&
       'mode' in message &&
-      (message.mode === 'capture' || message.mode === 'hide')) ||
+      (message.mode === 'capture' ||
+        message.mode === 'hide' ||
+        message.mode === 'blur')) ||
       message.type === 'STOP_SELECTION')
   );
 }
@@ -679,6 +719,10 @@ function toHideableElement(element: Element): HideableElement | null {
 function getSelectionModeMessage(mode: SelectionMode): string {
   if (mode === 'hide') {
     return 'Hide mode is active. Hover, click to hide, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
+  }
+
+  if (mode === 'blur') {
+    return 'Blur mode is active. Hover, click to blur, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
   }
 
   return 'Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
