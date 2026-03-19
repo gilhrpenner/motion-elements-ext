@@ -1,0 +1,284 @@
+:root {
+  color: #10231a;
+  background:
+    radial-gradient(circle at top left, rgba(122, 212, 166, 0.36), transparent 36%),
+    radial-gradient(circle at bottom right, rgba(19, 94, 66, 0.18), transparent 34%),
+    #f4f5ef;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  line-height: 1.45;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 388px;
+  min-height: 560px;
+}
+
+button,
+kbd {
+  font: inherit;
+}
+
+button {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    opacity 120ms ease,
+    box-shadow 120ms ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0 0.35rem;
+  border: 1px solid rgba(16, 35, 26, 0.12);
+  border-bottom-width: 2px;
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.78);
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.shell {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.hero,
+.panel {
+  border: 1px solid rgba(16, 35, 26, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 16px 40px rgba(14, 27, 20, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.hero {
+  padding: 18px 18px 16px;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #276749;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero h1,
+.section-head h2 {
+  margin: 0;
+  color: #10231a;
+}
+
+.hero h1 {
+  font-size: 1.38rem;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+}
+
+.subhead,
+.hint,
+.status-message,
+.capture-meta,
+.empty-state {
+  color: #4e5e56;
+}
+
+.subhead {
+  margin: 10px 0 0;
+  font-size: 0.92rem;
+}
+
+.hero-row,
+.actions,
+.section-head,
+.capture-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.hero-row {
+  margin-top: 16px;
+}
+
+.metric-label {
+  margin: 0;
+  color: #688277;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.metric-value {
+  margin: 4px 0 0;
+  color: #10231a;
+  font-size: 1.12rem;
+  font-weight: 700;
+}
+
+.status-pill {
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: rgba(39, 103, 73, 0.1);
+  color: #21543c;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.status-pill[data-tone='error'] {
+  background: rgba(185, 28, 28, 0.08);
+  color: #991b1b;
+}
+
+.actions {
+  margin-bottom: 10px;
+}
+
+.actions:last-of-type {
+  margin-bottom: 0;
+}
+
+.primary,
+.secondary,
+.ghost {
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: 14px;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.primary {
+  background: linear-gradient(135deg, #164e38, #2a7a55);
+  color: #f8fafc;
+  box-shadow: 0 12px 24px rgba(22, 78, 56, 0.24);
+}
+
+.secondary {
+  background: #e8f1eb;
+  color: #173c2b;
+}
+
+.ghost {
+  background: rgba(16, 35, 26, 0.05);
+  color: #4b5563;
+}
+
+.status-message {
+  min-height: 2.8em;
+  margin: 12px 0 0;
+  font-size: 0.86rem;
+}
+
+.status-message[data-tone='error'] {
+  color: #991b1b;
+}
+
+.section-head {
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.section-head h2 {
+  font-size: 1rem;
+}
+
+.hint {
+  max-width: 150px;
+  text-align: right;
+  font-size: 0.74rem;
+}
+
+.capture-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.capture-item {
+  padding: 12px;
+  border: 1px solid rgba(16, 35, 26, 0.08);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(245, 249, 246, 0.92));
+}
+
+.capture-title,
+.capture-label,
+.capture-time {
+  margin: 0;
+}
+
+.capture-title {
+  color: #173c2b;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
+.capture-label {
+  margin-top: 3px;
+  color: #10231a;
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.capture-time {
+  color: #688277;
+  font-size: 0.74rem;
+  text-align: right;
+}
+
+.capture-meta {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+}
+
+.capture-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty-state {
+  margin: 8px 0 0;
+  font-size: 0.86rem;
+}
