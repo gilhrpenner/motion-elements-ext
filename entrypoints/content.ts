@@ -21,6 +21,7 @@ type Tone = 'info' | 'success' | 'error';
 type HideableElement = HTMLElement | SVGElement;
 interface TextFragmentDialogResult {
   fragmentText: string | null;
+  hideFragment: boolean;
 }
 const BLUR_FILTER_VALUE = 'blur(8px)';
 
@@ -51,13 +52,14 @@ function createSelectorController() {
   let screenshotSuspended = false;
   const hiddenActionHistory: Array<{
     actionId: string;
-    source: 'capture' | 'hide' | 'blur';
+    source: 'capture' | 'hide' | 'blur' | 'text-fragment';
     label: string;
     element: HideableElement;
     previousVisibility: string;
     previousPriority: string;
     previousFilter: string;
     previousFilterPriority: string;
+    unwrapOnRestore?: boolean;
   }> = [];
 
   const onMessage = (
@@ -223,14 +225,14 @@ function createSelectorController() {
         shouldRecomputeSelection = true;
         showToast(`Blurred ${getElementLabel(element)}.`, 'success');
       } else if (selectionMode === 'text') {
-        const measuredFragment = await measureTextFragment(element);
-        if (!measuredFragment) {
+        const measuredFragmentResult = await measureTextFragment(element);
+        if (!measuredFragmentResult) {
           return;
         }
 
         const response = (await browser.runtime.sendMessage({
           type: 'SAVE_TEXT_FRAGMENT',
-          fragment: measuredFragment,
+          fragment: measuredFragmentResult.fragment,
         } satisfies ExtensionMessage)) as ExtensionResponse<{
           fragment: { fragmentText: string };
         }>;
@@ -238,6 +240,20 @@ function createSelectorController() {
         if (!response?.ok) {
           showToast(response?.error ?? 'Text fragment save failed.', 'error');
           return;
+        }
+
+        if (measuredFragmentResult.hideFragment) {
+          const hidden = hideTextFragmentRange(
+            measuredFragmentResult.range,
+            crypto.randomUUID(),
+            measuredFragmentResult.fragment.fragmentText,
+          );
+          if (!hidden) {
+            showToast('Saved text fragment, but could not hide it in place.', 'error');
+            return;
+          }
+
+          shouldRecomputeSelection = true;
         }
 
         showToast(`Saved text fragment ${response.data.fragment.fragmentText}.`, 'success');
@@ -462,7 +478,8 @@ function createSelectorController() {
     const latestHiddenAction = hiddenActionHistory[hiddenActionHistory.length - 1];
     if (
       latestHiddenAction?.source === 'hide' ||
-      latestHiddenAction?.source === 'blur'
+      latestHiddenAction?.source === 'blur' ||
+      latestHiddenAction?.source === 'text-fragment'
     ) {
       restoreHiddenAction(latestHiddenAction.actionId);
 
@@ -529,6 +546,7 @@ function createSelectorController() {
       previousPriority: hideableElement.style.getPropertyPriority('visibility'),
       previousFilter: hideableElement.style.getPropertyValue('filter'),
       previousFilterPriority: hideableElement.style.getPropertyPriority('filter'),
+      unwrapOnRestore: false,
     });
 
     if (source === 'blur') {
@@ -540,6 +558,32 @@ function createSelectorController() {
     return true;
   }
 
+  function hideTextFragmentRange(range: Range, actionId: string, label: string) {
+    const wrapper = document.createElement('span');
+    wrapper.dataset.motionCaptureFragmentHidden = actionId;
+    wrapper.style.setProperty('visibility', 'hidden', 'important');
+
+    try {
+      const fragment = range.extractContents();
+      wrapper.append(fragment);
+      range.insertNode(wrapper);
+      hiddenActionHistory.push({
+        actionId,
+        source: 'text-fragment',
+        label,
+        element: wrapper,
+        previousVisibility: '',
+        previousPriority: '',
+        previousFilter: '',
+        previousFilterPriority: '',
+        unwrapOnRestore: true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function restoreHiddenAction(actionId: string) {
     for (let index = hiddenActionHistory.length - 1; index >= 0; index -= 1) {
       const entry = hiddenActionHistory[index];
@@ -549,6 +593,19 @@ function createSelectorController() {
 
       hiddenActionHistory.splice(index, 1);
       if (!entry.element.isConnected) {
+        return;
+      }
+
+      if (entry.unwrapOnRestore) {
+        const parent = entry.element.parentNode;
+        if (!parent) {
+          return;
+        }
+
+        while (entry.element.firstChild) {
+          parent.insertBefore(entry.element.firstChild, entry.element);
+        }
+        parent.removeChild(entry.element);
         return;
       }
 
@@ -628,41 +685,45 @@ function createSelectorController() {
     }));
 
     return {
-      kind: 'text-fragment' as const,
-      pageUrl: window.location.href,
-      pageTitle: document.title,
-      tagName: element.tagName.toLowerCase(),
-      elementLabel: getElementLabel(element),
-      viewportX: rect.left,
-      viewportY: rect.top,
-      pageX: rect.left + window.scrollX,
-      pageY: rect.top + window.scrollY,
-      width: rect.width,
-      height: rect.height,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      documentWidth: pageMetrics.documentWidth,
-      documentHeight: pageMetrics.documentHeight,
-      bodyWidth: pageMetrics.bodyWidth,
-      bodyHeight: pageMetrics.bodyHeight,
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      devicePixelRatio: window.devicePixelRatio,
-      fullText,
-      fragmentText,
-      fragmentStart,
-      fragmentEnd,
-      fragmentRects,
-      fontFamily: styles.fontFamily,
-      fontSize: styles.fontSize,
-      fontWeight: styles.fontWeight,
-      fontStyle: styles.fontStyle,
-      lineHeight: styles.lineHeight,
-      letterSpacing: styles.letterSpacing,
-      color: styles.color,
-      textAlign: styles.textAlign,
-      textTransform: styles.textTransform,
-      textDecoration: styles.textDecoration,
+      fragment: {
+        kind: 'text-fragment' as const,
+        pageUrl: window.location.href,
+        pageTitle: document.title,
+        tagName: element.tagName.toLowerCase(),
+        elementLabel: getElementLabel(element),
+        viewportX: rect.left,
+        viewportY: rect.top,
+        pageX: rect.left + window.scrollX,
+        pageY: rect.top + window.scrollY,
+        width: rect.width,
+        height: rect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        documentWidth: pageMetrics.documentWidth,
+        documentHeight: pageMetrics.documentHeight,
+        bodyWidth: pageMetrics.bodyWidth,
+        bodyHeight: pageMetrics.bodyHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        devicePixelRatio: window.devicePixelRatio,
+        fullText,
+        fragmentText,
+        fragmentStart,
+        fragmentEnd,
+        fragmentRects,
+        fontFamily: styles.fontFamily,
+        fontSize: styles.fontSize,
+        fontWeight: styles.fontWeight,
+        fontStyle: styles.fontStyle,
+        lineHeight: styles.lineHeight,
+        letterSpacing: styles.letterSpacing,
+        color: styles.color,
+        textAlign: styles.textAlign,
+        textTransform: styles.textTransform,
+        textDecoration: styles.textDecoration,
+      },
+      range,
+      hideFragment: dialogResult.hideFragment,
     };
   }
 
@@ -785,11 +846,16 @@ function createSelectorController() {
             <input class="motion-text-modal__input" data-role="fragment-input" type="text" />
             <span class="motion-text-modal__hint">Use the exact visible substring, for example <code>INV-2048</code>, <code>Alex Morgan</code>, or <code>Paid</code>.</span>
           </label>
+          <label class="motion-text-modal__toggle">
+            <input data-role="hide-fragment" type="checkbox" checked />
+            <span>Hide this fragment on the page after saving it, while keeping layout space intact.</span>
+          </label>
           <details class="motion-text-modal__help" open>
             <summary>Help</summary>
             <div class="motion-text-modal__help-copy">
               <p><strong>Detected full text</strong> shows the raw text found inside the element you clicked. Use it to verify the fragment exists exactly as typed.</p>
               <p><strong>Fragment to export</strong> should contain only the changing or animatable part of the label. Examples: from <code>Invoice INV-2048</code>, export <code>INV-2048</code>; from <code>Assigned to Alex Morgan</code>, export <code>Alex Morgan</code>; from <code>Status: Paid</code>, export <code>Paid</code>.</p>
+              <p><strong>Hide after save</strong> wraps only the selected substring and applies <code>visibility: hidden</code>, so surrounding text and layout stay in place.</p>
               <p><strong>What gets saved</strong>: exact fragment bounds, per-line rects, page coordinates, and typography styles such as font family, size, weight, line height, letter spacing, color, alignment, and decoration.</p>
             </div>
           </details>
@@ -802,11 +868,13 @@ function createSelectorController() {
 
       const fullTextArea = modal.querySelector<HTMLTextAreaElement>('[data-role="full-text"]');
       const fragmentInput = modal.querySelector<HTMLInputElement>('[data-role="fragment-input"]');
+      const hideFragmentInput =
+        modal.querySelector<HTMLInputElement>('[data-role="hide-fragment"]');
       const saveButton = modal.querySelector<HTMLButtonElement>('[data-role="save"]');
       const cancelButtons = modal.querySelectorAll<HTMLElement>('[data-role="cancel"]');
 
-      if (!fullTextArea || !fragmentInput || !saveButton) {
-        resolve({ fragmentText: null });
+      if (!fullTextArea || !fragmentInput || !hideFragmentInput || !saveButton) {
+        resolve({ fragmentText: null, hideFragment: false });
         return;
       }
 
@@ -820,7 +888,7 @@ function createSelectorController() {
 
       const finish = (fragmentText: string | null) => {
         cleanup();
-        resolve({ fragmentText });
+        resolve({ fragmentText, hideFragment: hideFragmentInput.checked });
       };
 
       const onKeyDown = (event: KeyboardEvent) => {
