@@ -22,6 +22,7 @@
   --hide-accent: #ffa657;
   --blur-accent: #79c0ff;
   --text-fragment-accent: #7ee787;
+  --edit-accent: #f2cc60;
 
   color: var(--text-primary);
   background: var(--bg-base);
@@ -252,6 +253,12 @@ kbd {
   color: var(--text-fragment-accent);
 }
 
+.mode-btn[data-mode='edit']:not(:disabled):hover {
+  border-color: rgba(242, 204, 96, 0.3);
+  background: rgba(242, 204, 96, 0.06);
+  color: var(--edit-accent);
+}
+
 /* Active mode states */
 .mode-btn--active[data-mode='capture'] {
   border-color: rgba(210, 168, 255, 0.45);
@@ -279,6 +286,13 @@ kbd {
   background: rgba(126, 231, 135, 0.12);
   color: var(--text-fragment-accent);
   box-shadow: 0 0 12px rgba(126, 231, 135, 0.15), inset 0 0 12px rgba(126, 231, 135, 0.06);
+}
+
+.mode-btn--active[data-mode='edit'] {
+  border-color: rgba(242, 204, 96, 0.45);
+  background: rgba(242, 204, 96, 0.12);
+  color: var(--edit-accent);
+  box-shadow: 0 0 12px rgba(242, 204, 96, 0.15), inset 0 0 12px rgba(242, 204, 96, 0.06);
 }
 
 /* ── Action Bar ── */

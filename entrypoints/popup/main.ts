@@ -62,6 +62,10 @@ app.innerHTML = `
           <span class="mode-icon">T</span>
           Text
         </button>
+        <button class="mode-btn" data-mode="edit" id="edit-selection" type="button">
+          <span class="mode-icon">✎</span>
+          Edit
+        </button>
       </div>
     </section>
 
@@ -131,6 +135,7 @@ const startButton = requiredElement<HTMLButtonElement>('start-selection');
 const hideButton = requiredElement<HTMLButtonElement>('hide-selection');
 const blurButton = requiredElement<HTMLButtonElement>('blur-selection');
 const textButton = requiredElement<HTMLButtonElement>('text-selection');
+const editButton = requiredElement<HTMLButtonElement>('edit-selection');
 const stopButton = requiredElement<HTMLButtonElement>('stop-selection');
 const viewportButton = requiredElement<HTMLButtonElement>('capture-viewport');
 const exportButton = requiredElement<HTMLButtonElement>('export-session');
@@ -142,16 +147,17 @@ const suppressHoverStateToggle =
 let currentTabId: number | null = null;
 let tabIsScriptable = false;
 let currentSessionCount = 0;
-let activeMode: 'capture' | 'hide' | 'blur' | 'text' | null = null;
+let activeMode: 'capture' | 'hide' | 'blur' | 'text' | 'edit' | null = null;
 
 const modeButtons = {
   capture: startButton,
   hide: hideButton,
   blur: blurButton,
   text: textButton,
+  edit: editButton,
 };
 
-function setActiveMode(mode: 'capture' | 'hide' | 'blur' | 'text' | null) {
+function setActiveMode(mode: 'capture' | 'hide' | 'blur' | 'text' | 'edit' | null) {
   activeMode = mode;
   for (const [key, btn] of Object.entries(modeButtons)) {
     btn.classList.toggle('mode-btn--active', key === mode);
@@ -253,6 +259,30 @@ textButton.addEventListener('click', async () => {
 
     setActiveMode('text');
     setStatus('Text mode active.');
+  });
+});
+
+editButton.addEventListener('click', async () => {
+  const tabId = currentTabId;
+  if (tabId == null) {
+    setStatus('No active browser tab is available.', true);
+    return;
+  }
+
+  await withBusy(async () => {
+    const response = await sendMessage<{ tabId: number }>({
+      type: 'START_SELECTION',
+      tabId,
+      mode: 'edit',
+    });
+
+    if (!response.ok) {
+      setStatus(response.error, true);
+      return;
+    }
+
+    setActiveMode('edit');
+    setStatus('Free text editor active.');
   });
 });
 
@@ -394,7 +424,7 @@ async function initialize() {
 
     if (tabIsScriptable && currentTabId != null) {
       const modeResponse = await sendMessage<{
-        mode: 'capture' | 'hide' | 'blur' | 'text' | null;
+        mode: 'capture' | 'hide' | 'blur' | 'text' | 'edit' | null;
       }>({
         type: 'GET_ACTIVE_MODE',
         tabId: currentTabId,
@@ -521,6 +551,7 @@ function syncActionAvailability(busy = false) {
   hideButton.disabled = busy || !tabIsScriptable;
   blurButton.disabled = busy || !tabIsScriptable;
   textButton.disabled = busy || !tabIsScriptable;
+  editButton.disabled = busy || !tabIsScriptable;
   stopButton.disabled = busy || !tabIsScriptable || activeMode === null;
   viewportButton.disabled = busy || !tabIsScriptable;
   exportButton.disabled = busy || currentSessionCount === 0;

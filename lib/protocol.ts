@@ -1,6 +1,6 @@
 export const SELECTOR_SCRIPT_PATH = '/content-scripts/content.js';
 export const EXPORT_FOLDER_NAME = 'images';
-export type SelectionMode = 'capture' | 'hide' | 'blur' | 'text';
+export type SelectionMode = 'capture' | 'hide' | 'blur' | 'text' | 'edit';
 
 export interface TextFragmentRect {
   viewportX: number;

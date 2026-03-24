@@ -19,6 +19,7 @@ declare global {
 type SelectorController = ReturnType<typeof createSelectorController>;
 type Tone = 'info' | 'success' | 'error';
 type HideableElement = HTMLElement | SVGElement;
+type EditableHost = HTMLElement;
 interface TextFragmentDialogResult {
   fragmentText: string | null;
   hideFragment: boolean;
@@ -50,6 +51,7 @@ function createSelectorController() {
   let modalStyle: HTMLStyleElement | null = null;
   let lastPointer: { x: number; y: number } | null = null;
   let screenshotSuspended = false;
+  const editableElements = new Map<EditableHost, string | null>();
   const hiddenActionHistory: Array<{
     actionId: string;
     source: 'capture' | 'hide' | 'blur' | 'text-fragment';
@@ -94,8 +96,13 @@ function createSelectorController() {
     }
 
     ensureUi();
+    document.addEventListener('mousedown', handleEditInteraction, true);
+    document.addEventListener('mouseup', handleEditInteraction, true);
     document.addEventListener('mousemove', handleMouseMove, true);
+    document.addEventListener('click', handleEditInteraction, true);
     document.addEventListener('click', handleClick, true);
+    document.addEventListener('dblclick', handleEditInteraction, true);
+    document.addEventListener('auxclick', handleEditInteraction, true);
     document.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener('scroll', refreshOverlay, true);
     window.addEventListener('resize', refreshOverlay, true);
@@ -135,6 +142,14 @@ function createSelectorController() {
     active = true;
     selectionMode = mode;
     capturing = false;
+    if (mode === 'edit') {
+      hideOverlay();
+      hideToast();
+      showToast(getSelectionModeMessage(mode));
+      return;
+    }
+
+    restoreEditableElements();
     ensureUi();
     showToast(getSelectionModeMessage(mode));
     if (lastPointer) {
@@ -148,6 +163,7 @@ function createSelectorController() {
   function deactivate() {
     active = false;
     capturing = false;
+    restoreEditableElements();
     hoveredChain = [];
     selectedIndex = 0;
     hideOverlay();
@@ -156,11 +172,40 @@ function createSelectorController() {
 
   function handleMouseMove(event: MouseEvent) {
     lastPointer = { x: event.clientX, y: event.clientY };
-    if (!active || capturing) {
+    if (!active || capturing || selectionMode === 'edit') {
       return;
     }
 
     updateSelectionFromPoint(event.clientX, event.clientY);
+  }
+
+  function handleEditInteraction(event: MouseEvent) {
+    if (!active || selectionMode !== 'edit') {
+      return;
+    }
+
+    if (isManagedEventTarget(event.target)) {
+      return;
+    }
+
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    if (event.type === 'click' || event.type === 'dblclick' || event.type === 'auxclick') {
+      event.preventDefault();
+    }
+
+    if (event.type !== 'click') {
+      return;
+    }
+
+    const editableHost = resolveEditableHost(event.target);
+    if (!editableHost) {
+      showToast('No editable text node found here.', 'error');
+      return;
+    }
+
+    activateEditableHost(editableHost, event);
   }
 
   function updateSelectionFromPoint(clientX: number, clientY: number) {
@@ -177,6 +222,10 @@ function createSelectorController() {
 
   async function handleClick(event: MouseEvent) {
     if (!active || capturing) {
+      return;
+    }
+
+    if (selectionMode === 'edit') {
       return;
     }
 
@@ -312,6 +361,28 @@ function createSelectorController() {
       return;
     }
 
+    if (selectionMode === 'edit') {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        deactivate();
+        return;
+      }
+
+      if (
+        (event.key === 'Enter' || event.key === ' ') &&
+        event.target instanceof Element &&
+        event.target.closest('a, button, summary, [role="button"]') &&
+        !(event.target instanceof HTMLElement && event.target.isContentEditable)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+      }
+
+      return;
+    }
+
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -360,7 +431,7 @@ function createSelectorController() {
   }
 
   function refreshOverlay() {
-    if (!active || capturing || screenshotSuspended) {
+    if (!active || capturing || screenshotSuspended || selectionMode === 'edit') {
       hideOverlay();
       return;
     }
@@ -472,6 +543,34 @@ function createSelectorController() {
       }
     `;
     document.documentElement.append(captureStyle);
+  }
+
+  function activateEditableHost(host: EditableHost, event: MouseEvent) {
+    if (!editableElements.has(host)) {
+      editableElements.set(host, host.getAttribute('contenteditable'));
+      host.setAttribute('contenteditable', 'plaintext-only');
+      host.spellcheck = false;
+    }
+
+    host.focus({ preventScroll: true });
+    placeCaretAtPoint(host, event.clientX, event.clientY);
+    showToast(`Editing ${getElementLabel(host)}.`, 'info');
+  }
+
+  function restoreEditableElements() {
+    for (const [element, previousValue] of editableElements.entries()) {
+      if (!element.isConnected) {
+        continue;
+      }
+
+      if (previousValue == null) {
+        element.removeAttribute('contenteditable');
+      } else {
+        element.setAttribute('contenteditable', previousValue);
+      }
+    }
+
+    editableElements.clear();
   }
 
   async function undoLastCapture() {
@@ -1067,6 +1166,10 @@ function createSelectorController() {
     );
   }
 
+  function isManagedEventTarget(target: EventTarget | null): boolean {
+    return target instanceof Element && isManagedNode(target);
+  }
+
   return { mount };
 }
 
@@ -1282,7 +1385,8 @@ function isSelectorControlMessage(
       (message.mode === 'capture' ||
         message.mode === 'hide' ||
         message.mode === 'blur' ||
-        message.mode === 'text')) ||
+        message.mode === 'text' ||
+        message.mode === 'edit')) ||
       message.type === 'PREPARE_SCREENSHOT' ||
       message.type === 'RESTORE_SCREENSHOT' ||
       message.type === 'GET_SELECTION_STATE' ||
@@ -1313,6 +1417,87 @@ function toHideableElement(element: Element): HideableElement | null {
   return null;
 }
 
+function resolveEditableHost(target: EventTarget | null): EditableHost | null {
+  if (target instanceof HTMLElement && target.isContentEditable) {
+    return target;
+  }
+
+  let current: Element | null =
+    target instanceof Element ? target : target instanceof Text ? target.parentElement : null;
+
+  while (current && current !== document.body && current !== document.documentElement) {
+    if (
+      current instanceof HTMLElement &&
+      hasEditableText(current) &&
+      isReasonableEditableHost(current)
+    ) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
+}
+
+function hasEditableText(element: HTMLElement): boolean {
+  return (element.innerText || element.textContent || '').trim().length > 0;
+}
+
+function isReasonableEditableHost(element: HTMLElement): boolean {
+  if (element.closest('[contenteditable="false"]')) {
+    return false;
+  }
+
+  if (element.matches('input, textarea, select, option')) {
+    return false;
+  }
+
+  const textLength = (element.innerText || element.textContent || '').trim().length;
+  if (textLength === 0 || textLength > 400) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function placeCaretAtPoint(host: EditableHost, clientX: number, clientY: number) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  let range: Range | null = null;
+
+  if (typeof document.caretRangeFromPoint === 'function') {
+    range = document.caretRangeFromPoint(clientX, clientY);
+  } else if (typeof document.caretPositionFromPoint === 'function') {
+    const position = document.caretPositionFromPoint(clientX, clientY);
+    if (position) {
+      range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+    }
+  }
+
+  if (range && host.contains(range.startContainer)) {
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return;
+  }
+
+  const fallbackRange = document.createRange();
+  fallbackRange.selectNodeContents(host);
+  fallbackRange.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(fallbackRange);
+}
+
 function getSelectionModeMessage(mode: SelectionMode): string {
   if (mode === 'hide') {
     return 'Hide mode is active. Hover, click to hide, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
@@ -1324,6 +1509,10 @@ function getSelectionModeMessage(mode: SelectionMode): string {
 
   if (mode === 'text') {
     return 'Text mode is active. Hover a text element, click it, enter the exact fragment to measure, then export the saved text metadata for Remotion.';
+  }
+
+  if (mode === 'edit') {
+    return 'Free text editor is active. Click any text host on the page and type to edit it directly. Page click handlers are suppressed. Press Esc or Stop to leave edit mode.';
   }
 
   return 'Selection mode is active. Hover, click to capture, use [ and ] to change depth, Cmd/Ctrl+Z to undo, Esc to stop.';
